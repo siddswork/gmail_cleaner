@@ -1,0 +1,22 @@
+# --- Credentials & secrets (NEVER commit these) ---
+auth/credentials/
+data/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+
+# --- Test & tooling artifacts ---
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+
+# --- OS ---
+.DS_Store
+Thumbs.db
