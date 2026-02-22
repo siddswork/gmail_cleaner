@@ -4,25 +4,23 @@
 A personal web-based tool to clean up a 20-year-old Gmail account (and up to 2-3 family accounts) that is nearing storage capacity. The goal is to visualize storage usage, bulk-delete unwanted emails, and unsubscribe from mailing lists — with the user always in control. Nothing is deleted without explicit approval.
 
 ## Tech Stack
-- **Frontend/UI**: Streamlit
-- **Language**: Python
+- **Frontend/UI**: Next.js 16 (TypeScript, Tailwind CSS, Recharts)
+- **Backend**: FastAPI + uvicorn
+- **Language**: Python (backend), TypeScript (frontend)
 - **Gmail access**: `google-api-python-client` with OAuth2 (`gmail.modify` scope only)
 - **Local cache**: SQLite (one DB per account)
 - **Data analysis**: pandas
-- **Charts**: Plotly
-- **No FastAPI** — Streamlit calls Gmail API directly through Python service modules
 
 ## Architecture
 ```
-Streamlit App --> Python Service Layer --> Gmail API
-                        |
-                   SQLite Cache (per account)
+Next.js (port 3000) --> FastAPI (port 8000) --> Python Service Layer --> Gmail API
+                                                         |
+                                                   SQLite Cache (per account)
 ```
 
 ## Project Structure
 ```
 gmail_cleaner/
-├── app.py                      # Entry point, auth flow, account switcher, sync
 ├── requirements.txt
 ├── .gitignore
 ├── CLAUDE.md
@@ -46,31 +44,46 @@ gmail_cleaner/
 │
 ├── analysis/
 │   ├── aggregator.py           # Top senders, category breakdown, timeline
-│   └── insights.py             # Read behavior, frequency, dead subscriptions
-│
-├── pages/
-│   ├── 1_Dashboard.py          # Space analysis charts and tables
-│   ├── 2_Cleanup.py            # Bulk delete with preview + confirmation
-│   ├── 3_Unsubscribe.py        # Subscription manager
-│   └── 4_Insights.py           # Read behavior insights
+│   ├── insights.py             # Read behavior, frequency, dead subscriptions, oldest_unread_senders
+│   └── cleanup_queries.py      # cleanup_query_messages() — extracted from old Cleanup page
 │
 ├── components/
-│   ├── safety.py               # Protection checks, confirmation dialogs
-│   ├── filters.py              # Reusable filter widgets
-│   └── charts.py               # Plotly chart wrappers
+│   ├── safety.py               # live_label_check(), is_large_batch() — no UI deps
+│   └── filters.py              # apply_filters() — pure pandas, no UI deps
+│
+├── backend/                    # FastAPI app
+│   ├── main.py                 # App factory, CORS, lifespan (auto-loads tokens on startup)
+│   ├── state.py                # In-memory: gmail_services, sync_threads, pending_flows
+│   ├── dependencies.py         # get_account(), get_service() dependency injection
+│   ├── models/schemas.py       # Pydantic request/response models
+│   └── routers/
+│       ├── auth.py             # GET /accounts, POST /connect, GET /callback, DELETE /accounts/{email}
+│       ├── sync.py             # GET /status, POST /start, GET /progress (SSE)
+│       ├── dashboard.py        # GET /stats, /top-senders, /categories, /timeline
+│       ├── cleanup.py          # POST /preview, POST /execute
+│       ├── unsubscribe.py      # GET /dead, POST /post
+│       └── insights.py         # GET /read-rate, /unread-by-label, /oldest-unread
+│
+├── frontend/                   # Next.js app
+│   ├── src/app/                # App Router pages (layout, home, dashboard, cleanup, unsubscribe, insights)
+│   ├── src/components/         # UI components (Sidebar, AccountSwitcher, SyncBanner, charts, etc.)
+│   ├── src/hooks/              # useAccounts, useSyncStatus (SSE), useCleanup (state machine)
+│   └── src/lib/                # api.ts, types.ts, format.ts
+│
+├── tests/                      # 283 tests — all service layer + all FastAPI routers
 │
 └── data/                       # .gitignored — per-account isolated storage
-    └── <email>/                # e.g., data/sidd@gmail.com/
-        ├── token.json          # OAuth token for this account
-        └── cache.db            # SQLite cache for this account
+    └── <email>/
+        ├── token.json
+        └── cache.db
 ```
 
 ## Multi-Account Support
 - One GCP project / OAuth client (`client_secret.json`) shared across all accounts
 - Each account gets its own isolated `data/<email>/` directory
-- Sidebar account switcher: add, switch, remove accounts
-- `st.session_state['active_account']` tracks the currently active account
-- All service modules accept an `account_email` parameter to resolve the correct data path
+- Account switcher on Home page: add, switch, remove accounts
+- `backend/state.py` `gmail_services` dict tracks active services
+- All service modules accept an `account_email` parameter
 
 ## Capacity Analysis (Primary Account)
 
@@ -210,17 +223,27 @@ remind me of TDD and ask: "Should I start with the failing test first?"
 Red → Green → Refactor. Always.
 
 ## Running the App
+
+**Backend** (terminal 1, from project root):
 ```bash
-streamlit run app.py
+uvicorn backend.main:app --reload --port 8000
 ```
 
+**Frontend** (terminal 2):
+```bash
+cd frontend && npm run dev
+```
+
+Open `http://localhost:3000` in browser.
+
 ## Key Gotchas
-- Streamlit reruns the entire script on every interaction — all state must be in `st.session_state` or SQLite, never Python globals
 - `sender_email` must be parsed from the `From` header at insert time (e.g., extract `email@example.com` from `"Name <email@example.com>"`)
 - `is_starred` and `is_important` are denormalized from `label_ids` at insert time for fast safety queries
-- Initial full sync takes ~90–120 minutes for ~190k emails (primary account) — show progress bar and allow browsing partial data during sync; sync must be resumable via a page checkpoint in `sync_state`
+- Initial full sync takes ~90–120 minutes for ~190k emails (primary account) — SSE progress stream via `GET /api/sync/progress`; sync must be resumable via a page checkpoint in `sync_state`
 - After trashing messages, delete those rows from SQLite immediately (don't wait for next sync)
 - The `data/` and `auth/credentials/` directories are gitignored — never commit tokens or credentials
+- Backend auto-loads existing tokens on startup (lifespan event in `backend/main.py`)
+- OAuth redirect URI must be `http://localhost:8000/api/auth/callback` in GCP console
 
 ---
 
@@ -228,43 +251,56 @@ streamlit run app.py
 **Date**: 2026-02-22
 
 ### What We Were Trying to Accomplish
-Complete Phase 5 (Unsubscribe & Insights) — the final phase — using strict TDD for the service layer, then build the two Streamlit UI pages and push everything.
+Two things this session:
+1. Complete the Streamlit → FastAPI + Next.js migration (Phases A–D) — DONE
+2. Implement a UX rework based on user feedback — plan written, **NOT YET COMMITTED OR IMPLEMENTED**
 
 ### What Was Completed
 
-**Phase 5 — Insights service layer (TDD, committed `f99209e`):**
-- `analysis/insights.py` — three functions:
-  - `dead_subscriptions(account_email, days)`: senders with unsubscribe URLs where ALL emails are unread and most recent email is older than `days`. Uses correlated subquery to return `unsubscribe_url` from the most recent email (not lexicographic MAX). Ordered by count descending. Excludes starred/important.
-  - `read_rate_by_sender(account_email, limit)`: per-sender read rate (`read_count / total_count`), ordered by total email count descending. Excludes starred/important.
-  - `unread_by_label(account_email)`: unread count + total size per `CATEGORY_*` label, sorted by category name. Python-side aggregation (mirrors `category_breakdown` pattern). Excludes starred/important.
-- `tests/test_insights.py` — 26 tests, all passing.
-- **231 tests total, all passing.**
+**Full Streamlit → FastAPI + Next.js migration (283 tests passing):**
 
-**Phase 5 — UI pages (committed `d61a43d`):**
-- `pages/3_Unsubscribe.py` — Sidebar: days slider (7–365, default 30). Main: dead subscription list with metrics (total / pending / actioned). Per-sender bordered card showing name, count, size, last email date. Three action buttons per card: **POST unsub** (calls `unsubscribe_via_post`, disabled if no `List-Unsubscribe-Post` header), **Open URL** (`st.link_button`), **Skip**. Session state `unsub_actioned` (set of sender_emails) persists actions across reruns; sidebar "Reset actioned list" button.
-- `pages/4_Insights.py` — Three sections: (1) **Read Rate by Sender**: sidebar limit slider, horizontal bar chart colour-coded green/red by rate + table with read/unread/total/rate columns. (2) **Unread by Category**: dual bar charts (count + size) + summary table. (3) **Oldest Unread Senders**: inline SQL query (`_oldest_unread_senders`), table showing sender, unread count, size, date of last unread email.
+- Phase A: Service layer additions — `oldest_unread_senders()`, `create_auth_flow()`, `exchange_code()`, `cleanup_query_messages()`
+- Phase B: FastAPI backend — `backend/` directory with 6 routers (auth, sync SSE, dashboard, cleanup, unsubscribe, insights)
+- Phase C: Next.js frontend — 5 pages, 10+ components, Recharts charts, SSE-based sync, `AccountContext` for shared state, `useCleanup` state machine
+- Phase D: Deleted `app.py`, `pages/`, trimmed Streamlit deps from `components/`, updated `.gitignore`, `CLAUDE.md`, `README.md`
+- 283 tests all pass; `npm run build` clean
 
-**Git state — all committed and pushed to `origin/main`:**
-- `f99209e` — Phase 5 insights service layer (231 tests)
-- `d61a43d` — Phase 5 UI pages (3_Unsubscribe, 4_Insights)
-- Working tree is clean. Remote is up to date.
+### What Is In Progress — NOT YET COMMITTED
 
-### What Is In Progress
-Nothing. All 5 phases are fully implemented, tested, committed, and pushed.
+**Git state: everything is STAGED but not committed, and deletions still need to be staged.**
+
+To complete the commit:
+```bash
+git add -u  # stages deleted files (app.py, pages/*)
+git add frontend/.gitignore  # untracked
+git commit -m "Migrate from Streamlit to FastAPI + Next.js (283 tests passing)"
+git push
+```
+
+**UX rework plan written but not implemented** — plan file at:
+`/home/sidd/.claude/plans/refactored-juggling-meteor.md`
+
+UX rework covers 4 phases:
+1. **Backend**: graceful sync stop (`threading.Event`), store `messages_total`/`sync_started_ts`, filter `__new__` from accounts, add `POST /api/auth/logout`
+2. **Frontend AccountContext**: single login/logout model (remove `setActiveAccount`, add `logout()`)
+3. **UI rework**: merge Home+Dashboard into `page.tsx` (login page when logged out, dashboard when in), conditional sidebar nav, new `SyncBanner` with progress bar + ETA, delete `AccountSwitcher.tsx` and `dashboard/page.tsx`
+4. **Dashboard auto-refresh**: `setInterval` every 30s while `is_syncing`
 
 ### Known Issues / Blockers
-- **GCP project not yet set up** — `client_secret.json` missing at `auth/credentials/client_secret.json`. This is the only thing blocking a live run. All logic is covered by unit tests.
-- `app.py` `_add_account` rough edge: authenticates as `"__new__"` first, then re-authenticates under real email. Will be cleaned up once GCP is live.
-- `app.py` sync progress banner uses `time.sleep(3)` + `st.rerun()` as a polling loop — acceptable for now.
-- `test_safety.py::TestLiveLabelCheck::test_all_safe_messages` takes ~0.25s (vs <0.09s for others) — not a bug, it's first-import cost of `streamlit` since all imports are inside method bodies. Total suite time unaffected.
+- **GCP project not yet set up** — `client_secret.json` missing. This blocks live runs.
+- **`__new__` account showing in UI** — artifact from old OAuth flow; fixed in UX rework plan (filter it in `backend/routers/auth.py` `list_accounts()`)
+- **Home page UX problems** — multi-account switcher layout is confusing; fixed in UX rework plan
+- **No sync progress bar** — only "Syncing... N cached" text; fixed in UX rework plan
 
 ### Exact Next Step to Resume
-**Set up GCP and run the app for the first time.**
 
-Steps:
-1. Go to [console.cloud.google.com](https://console.cloud.google.com), create a project, enable **Gmail API**.
-2. Create OAuth 2.0 credentials → Desktop app → download JSON → save as `auth/credentials/client_secret.json`.
-3. Add your Gmail address as a test user (OAuth consent screen → Test users).
-4. Run `streamlit run app.py`, click "Add account", complete OAuth flow in browser.
-5. Kick off the first full sync — expect ~90–120 minutes for ~190k emails. Progress bar is shown; sync is resumable if interrupted.
-6. After sync completes, explore Dashboard → Cleanup → Unsubscribe → Insights.
+**Step 1: Finish the commit** (this was interrupted during this session):
+```bash
+cd /home/sidd/dev/utility/gmail_cleaner
+git add -u
+git add frontend/.gitignore
+git commit -m "Migrate from Streamlit to FastAPI + Next.js (283 tests passing)"
+git push
+```
+
+**Step 2: Implement the UX rework** — read plan at `/home/sidd/.claude/plans/refactored-juggling-meteor.md`, then proceed with TDD starting from Phase 1 (backend changes). Use Opus for planning, Sonnet for coding.

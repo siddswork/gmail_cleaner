@@ -11,6 +11,7 @@ import pytest
 from cache.database import init_db, upsert_email
 from analysis.insights import (
     dead_subscriptions,
+    oldest_unread_senders,
     read_rate_by_sender,
     unread_by_label,
 )
@@ -384,3 +385,100 @@ class TestUnreadByLabel:
         result = unread_by_label(account)
         cats = [r["category"] for r in result]
         assert cats == sorted(cats)
+
+
+# ---------------------------------------------------------------------------
+# oldest_unread_senders
+# ---------------------------------------------------------------------------
+
+class TestOldestUnreadSenders:
+    def test_returns_senders_ordered_by_oldest_latest_unread(self, account):
+        """Senders whose most recent unread is oldest should appear first."""
+        upsert_email(account, _make_email(
+            "m1", sender_email="old@x.com", is_read=False,
+            date_ts=1000000000, size_estimate=500,
+        ))
+        upsert_email(account, _make_email(
+            "m2", sender_email="recent@x.com", is_read=False,
+            date_ts=1700000000, size_estimate=300,
+        ))
+
+        result = oldest_unread_senders(account, limit=10)
+        assert len(result) == 2
+        assert result[0]["sender_email"] == "old@x.com"
+        assert result[1]["sender_email"] == "recent@x.com"
+
+    def test_returns_unread_count_and_size(self, account):
+        upsert_email(account, _make_email(
+            "m1", sender_email="bulk@x.com", is_read=False,
+            date_ts=1000000000, size_estimate=100,
+        ))
+        upsert_email(account, _make_email(
+            "m2", sender_email="bulk@x.com", is_read=False,
+            date_ts=1000086400, size_estimate=200,
+        ))
+
+        result = oldest_unread_senders(account, limit=10)
+        assert result[0]["unread_count"] == 2
+        assert result[0]["total_size"] == 300
+
+    def test_excludes_read_emails(self, account):
+        upsert_email(account, _make_email(
+            "m1", sender_email="mixed@x.com", is_read=True, date_ts=1000000000,
+        ))
+
+        result = oldest_unread_senders(account, limit=10)
+        assert len(result) == 0
+
+    def test_excludes_starred(self, account):
+        upsert_email(account, _make_email(
+            "m1", sender_email="star@x.com", is_read=False,
+            date_ts=1000000000, is_starred=True,
+        ))
+
+        result = oldest_unread_senders(account, limit=10)
+        assert len(result) == 0
+
+    def test_excludes_important(self, account):
+        upsert_email(account, _make_email(
+            "m1", sender_email="imp@x.com", is_read=False,
+            date_ts=1000000000, is_important=True,
+        ))
+
+        result = oldest_unread_senders(account, limit=10)
+        assert len(result) == 0
+
+    def test_respects_limit(self, account):
+        for i in range(5):
+            upsert_email(account, _make_email(
+                f"m{i}", sender_email=f"user{i}@x.com", is_read=False,
+                date_ts=1000000000 + i * 86400,
+            ))
+
+        result = oldest_unread_senders(account, limit=3)
+        assert len(result) == 3
+
+    def test_empty_database_returns_empty_list(self, account):
+        result = oldest_unread_senders(account, limit=10)
+        assert result == []
+
+    def test_includes_sender_name(self, account):
+        upsert_email(account, _make_email(
+            "m1", sender_email="a@x.com", sender_name="Alice",
+            is_read=False, date_ts=1000000000,
+        ))
+
+        result = oldest_unread_senders(account, limit=10)
+        assert result[0]["sender_name"] == "Alice"
+
+    def test_returns_latest_unread_ts(self, account):
+        """latest_unread_ts should be the MAX date_ts for unread emails from that sender."""
+        upsert_email(account, _make_email(
+            "m1", sender_email="a@x.com", is_read=False, date_ts=1000000000,
+        ))
+        upsert_email(account, _make_email(
+            "m2", sender_email="a@x.com", is_read=False, date_ts=1000086400,
+        ))
+
+        result = oldest_unread_senders(account, limit=10)
+        assert result[0]["latest_unread_ts"] == 1000086400

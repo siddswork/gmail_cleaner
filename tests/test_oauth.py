@@ -234,7 +234,7 @@ class TestGetAuthenticatedService:
             MockFlow.from_client_secrets_file.return_value = mock_flow
             get_authenticated_service("user@gmail.com")
         MockFlow.from_client_secrets_file.assert_called_once()
-        mock_flow.run_local_server.assert_called_once_with(port=0)
+        mock_flow.run_local_server.assert_called_once_with(port=0, open_browser=False)
         mock_save.assert_called_once_with("user@gmail.com", mock_creds)
 
     def test_saves_credentials_after_oauth_flow(

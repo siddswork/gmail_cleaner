@@ -1,9 +1,7 @@
 """
-Filter logic for the Dashboard.
+Filter logic for the cleanup workflow.
 
-apply_filters() is a pure pandas function — no Streamlit dependency.
-Streamlit widget functions (date_range_filter, label_filter, sender_filter,
-size_filter) are UI helpers that return values to pass into apply_filters().
+apply_filters() is a pure pandas function — no UI dependencies.
 """
 import json
 
@@ -68,46 +66,3 @@ def apply_filters(df: pd.DataFrame, filters: dict) -> pd.DataFrame:
         mask &= df["is_read"] == False  # noqa: E712
 
     return df[mask].reset_index(drop=True)
-
-
-# ---------------------------------------------------------------------------
-# Streamlit widget helpers (not unit tested — require Streamlit context)
-# ---------------------------------------------------------------------------
-
-def date_range_filter():
-    """Render date range pickers and return (start_ts, end_ts) as Unix timestamps or (None, None)."""
-    import streamlit as st
-    from datetime import datetime, timezone
-
-    col1, col2 = st.columns(2)
-    start_date = col1.date_input("From", value=None, key="filter_start_date")
-    end_date = col2.date_input("To", value=None, key="filter_end_date")
-
-    start_ts = int(datetime(start_date.year, start_date.month, start_date.day, tzinfo=timezone.utc).timestamp()) if start_date else None
-    end_ts = int(datetime(end_date.year, end_date.month, end_date.day, 23, 59, 59, tzinfo=timezone.utc).timestamp()) if end_date else None
-    return start_ts, end_ts
-
-
-def sender_filter() -> str:
-    """Render a sender search box and return the search string."""
-    import streamlit as st
-    return st.text_input("Sender", placeholder="Search by name or email", key="filter_sender")
-
-
-def label_filter(available_labels: list[str]) -> list[str]:
-    """Render a multiselect for Gmail labels and return selected labels."""
-    import streamlit as st
-    return st.multiselect("Labels", options=available_labels, key="filter_labels")
-
-
-def size_filter() -> tuple[int | None, int | None]:
-    """Render min/max size sliders (in KB) and return (min_bytes, max_bytes)."""
-    import streamlit as st
-
-    col1, col2 = st.columns(2)
-    min_kb = col1.number_input("Min size (KB)", min_value=0, value=0, step=10, key="filter_min_size")
-    max_kb = col2.number_input("Max size (KB)", min_value=0, value=0, step=10, key="filter_max_size")
-
-    min_size = min_kb * 1024 if min_kb > 0 else None
-    max_size = max_kb * 1024 if max_kb > 0 else None
-    return min_size, max_size

@@ -17,6 +17,15 @@ build/
 htmlcov/
 *.log
 
+# --- Start/stop script artifacts ---
+.backend.pid
+.frontend.pid
+
+# --- Frontend ---
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+
 # --- OS ---
 .DS_Store
 Thumbs.db

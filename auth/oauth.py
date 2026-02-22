@@ -14,7 +14,7 @@ from pathlib import Path
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_oauthlib.flow import Flow, InstalledAppFlow
 from googleapiclient.discovery import build
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
@@ -92,7 +92,57 @@ def get_authenticated_service(account_email: str):
         flow = InstalledAppFlow.from_client_secrets_file(
             get_client_secret_path(), SCOPES
         )
-        creds = flow.run_local_server(port=0)
+        creds = flow.run_local_server(port=0, open_browser=False)
         save_credentials(account_email, creds)
 
     return build("gmail", "v1", credentials=creds)
+
+
+# ---------------------------------------------------------------------------
+# Web-based OAuth flow (for FastAPI backend)
+# ---------------------------------------------------------------------------
+
+def create_auth_flow(redirect_uri: str) -> tuple:
+    """
+    Create an OAuth2 flow for web-based authorization.
+
+    Returns (flow, auth_url) where:
+      - flow: the Flow object (store it keyed by state for the callback)
+      - auth_url: the URL the user should visit to authorize
+    """
+    flow = Flow.from_client_secrets_file(
+        get_client_secret_path(),
+        scopes=SCOPES,
+        redirect_uri=redirect_uri,
+    )
+    auth_url, _ = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent",
+    )
+    return flow, auth_url
+
+
+def exchange_code(flow, code: str) -> tuple:
+    """
+    Exchange an authorization code for credentials.
+
+    Steps:
+      1. Fetch token using the code
+      2. Get the user's email via getProfile
+      3. Save credentials to data/<email>/token.json
+
+    Returns (email, credentials).
+    """
+    flow.fetch_token(code=code)
+    creds = flow.credentials
+
+    # Get the user's email address
+    service = build("gmail", "v1", credentials=creds)
+    profile = service.users().getProfile(userId="me").execute()
+    email = profile["emailAddress"]
+
+    # Persist credentials
+    save_credentials(email, creds)
+
+    return email, creds

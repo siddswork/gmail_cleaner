@@ -115,3 +115,32 @@ def unread_by_label(account_email: str) -> list[dict]:
         {"category": cat, "unread_count": counts[cat], "total_size": sizes[cat]}
         for cat in sorted(counts)
     ]
+
+
+def oldest_unread_senders(account_email: str, limit: int = 20) -> list[dict]:
+    """
+    Return senders with the oldest most-recent unread email,
+    excluding starred and important. Ordered by latest_unread_ts ASC
+    (oldest first).
+    """
+    conn = _connect(account_email)
+    rows = conn.execute(
+        """
+        SELECT
+            sender_email,
+            sender_name,
+            COUNT(*)           AS unread_count,
+            SUM(size_estimate) AS total_size,
+            MAX(date_ts)       AS latest_unread_ts
+        FROM emails
+        WHERE is_read = 0
+          AND is_starred = 0
+          AND is_important = 0
+        GROUP BY sender_email
+        ORDER BY latest_unread_ts ASC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
