@@ -11,7 +11,7 @@ import re
 import time
 from email.utils import parseaddr, parsedate_to_datetime
 
-from gmail.client import batch_execute
+from gmail.client import batch_execute, execute_with_retry
 
 # Headers we request from the API (everything else is ignored)
 METADATA_HEADERS = [
@@ -50,12 +50,14 @@ def list_message_ids(service, query: str = "", page_token: str = None) -> dict:
             "next_page_token": str | None,
         }
     """
-    response = service.users().messages().list(
-        userId="me",
-        maxResults=500,
-        pageToken=page_token,
-        q=query,
-    ).execute()
+    response = execute_with_retry(
+        service.users().messages().list(
+            userId="me",
+            maxResults=500,
+            pageToken=page_token,
+            q=query,
+        )
+    )
 
     messages = response.get("messages", [])
     return {

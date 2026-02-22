@@ -49,9 +49,18 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     if (!activeAccount) return;
     await api.auth.logout(activeAccount);
+    // Clear active account immediately — do NOT call refresh() here because
+    // refresh() auto-selects the first account, which would undo the logout.
     setActiveAccount(null);
-    await refresh();
-  }, [activeAccount, refresh]);
+    // Update accounts list for display without triggering auto-select.
+    try {
+      const data = await api.auth.accounts();
+      const filtered = data.accounts.filter((a) => a.email !== "__new__");
+      setAccounts(filtered);
+    } catch {
+      // ignore
+    }
+  }, [activeAccount]);
 
   return (
     <AccountContext.Provider value={{ accounts, activeAccount, loading, refresh, connect, logout }}>

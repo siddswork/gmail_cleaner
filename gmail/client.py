@@ -6,11 +6,23 @@ Provides:
   - execute_with_retry : single request with exponential backoff on transient errors
   - batch_execute      : splits a request list into chunks of 50, executes each batch
 """
+import json
 import time
 
 from googleapiclient.errors import HttpError
 
 RETRYABLE_STATUS_CODES = {429, 500, 503}
+RATE_LIMIT_403_REASONS = {"rateLimitExceeded", "userRateLimitExceeded"}
+
+
+def _is_rate_limit_403(exc: HttpError) -> bool:
+    """Return True if a 403 HttpError is a rate-limit error (retriable)."""
+    try:
+        data = json.loads(exc.content)
+        reasons = {e.get("reason", "") for e in data.get("error", {}).get("errors", [])}
+        return bool(reasons & RATE_LIMIT_403_REASONS)
+    except Exception:
+        return False
 
 
 class RateLimiter:
@@ -54,8 +66,12 @@ def execute_with_retry(request, max_attempts: int = 5, base_delay: float = 1.0):
         try:
             return request.execute()
         except HttpError as exc:
-            if exc.resp.status not in RETRYABLE_STATUS_CODES:
-                raise
+            status = exc.resp.status
+            if status not in RETRYABLE_STATUS_CODES:
+                if status == 403 and _is_rate_limit_403(exc):
+                    pass  # fall through to retry
+                else:
+                    raise
             last_exc = exc
             time.sleep(base_delay * (2 ** attempt))
     raise last_exc

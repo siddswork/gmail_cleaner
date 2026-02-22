@@ -15,10 +15,18 @@ from gmail.client import RateLimiter, execute_with_retry, batch_execute
 # Helpers
 # ---------------------------------------------------------------------------
 
-def make_http_error(status: int) -> HttpError:
+import json
+
+def make_http_error(status: int, reason: str = "") -> HttpError:
     resp = MagicMock()
     resp.status = status
-    return HttpError(resp=resp, content=b'{"error": "test"}')
+    content = json.dumps({
+        "error": {
+            "errors": [{"reason": reason}] if reason else [],
+            "message": reason or "test",
+        }
+    }).encode()
+    return HttpError(resp=resp, content=content)
 
 
 # ---------------------------------------------------------------------------
@@ -93,12 +101,37 @@ class TestExecuteWithRetry:
             result = execute_with_retry(request)
         assert result == {"id": "msg_001"}
 
-    def test_does_not_retry_on_403(self):
+    def test_does_not_retry_on_403_permission_denied(self):
+        """Non-rate-limit 403 (e.g. wrong scope) must not be retried."""
         request = MagicMock()
-        request.execute.side_effect = make_http_error(403)
+        request.execute.side_effect = make_http_error(403, reason="forbidden")
         with pytest.raises(HttpError):
             execute_with_retry(request)
         request.execute.assert_called_once()
+
+    def test_retries_on_403_rate_limit_exceeded(self):
+        """403 with rateLimitExceeded must be retried with backoff."""
+        request = MagicMock()
+        request.execute.side_effect = [
+            make_http_error(403, reason="rateLimitExceeded"),
+            {"id": "msg_001"},
+        ]
+        with patch("time.sleep"):
+            result = execute_with_retry(request)
+        assert result == {"id": "msg_001"}
+        assert request.execute.call_count == 2
+
+    def test_retries_on_403_user_rate_limit_exceeded(self):
+        """403 with userRateLimitExceeded must be retried with backoff."""
+        request = MagicMock()
+        request.execute.side_effect = [
+            make_http_error(403, reason="userRateLimitExceeded"),
+            {"id": "msg_001"},
+        ]
+        with patch("time.sleep"):
+            result = execute_with_retry(request)
+        assert result == {"id": "msg_001"}
+        assert request.execute.call_count == 2
 
     def test_raises_after_max_attempts(self):
         request = MagicMock()
