@@ -81,11 +81,11 @@ class TestFullSync:
         with (
             patch("cache.sync.list_message_ids") as mock_list,
             patch("cache.sync.fetch_metadata_batch", return_value=[email]),
-            patch("cache.sync.upsert_email") as mock_upsert,
+            patch("cache.sync.batch_upsert_emails") as mock_upsert,
         ):
             mock_list.return_value = {"ids": ["msg_1"], "next_page_token": None}
             full_sync(account, service)
-        mock_upsert.assert_called_once_with(account, email)
+        mock_upsert.assert_called_once_with(account, [email])
 
     def test_stores_history_id_after_sync(self, account):
         service = make_service(history_id="42000")
@@ -164,7 +164,7 @@ class TestFullSync:
         with (
             patch("cache.sync.list_message_ids") as mock_list,
             patch("cache.sync.fetch_metadata_batch", return_value=emails),
-            patch("cache.sync.upsert_email"),
+            patch("cache.sync.batch_upsert_emails"),
         ):
             mock_list.return_value = {
                 "ids": ["msg_0", "msg_1", "msg_2"],
@@ -211,11 +211,11 @@ class TestIncrementalSync:
         email = make_email_data("new_msg_1")
         with (
             patch("cache.sync.fetch_metadata_batch", return_value=[email]) as mock_fetch,
-            patch("cache.sync.upsert_email") as mock_upsert,
+            patch("cache.sync.batch_upsert_emails") as mock_upsert,
         ):
             incremental_sync(account, service)
         mock_fetch.assert_called_once_with(service, ["new_msg_1"])
-        mock_upsert.assert_called_once_with(account, email)
+        mock_upsert.assert_called_once_with(account, [email])
 
     def test_deletes_removed_messages(self, account):
         set_sync_state(account, "last_history_id", "12345")
@@ -262,7 +262,7 @@ class TestIncrementalSync:
         added_emails = [make_email_data("a"), make_email_data("b")]
         with (
             patch("cache.sync.fetch_metadata_batch", return_value=added_emails),
-            patch("cache.sync.upsert_email"),
+            patch("cache.sync.batch_upsert_emails"),
             patch("cache.sync.delete_emails"),
         ):
             count = incremental_sync(account, service)

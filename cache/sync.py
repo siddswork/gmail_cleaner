@@ -14,10 +14,10 @@ Incremental sync:
 import time
 
 from cache.database import (
+    batch_upsert_emails,
     delete_emails,
     get_sync_state,
     set_sync_state,
-    upsert_email,
 )
 from gmail.fetcher import fetch_metadata_batch, list_message_ids
 
@@ -55,8 +55,7 @@ def full_sync(account_email: str, service, progress_callback=None) -> int:
 
         if ids:
             emails = fetch_metadata_batch(service, ids)
-            for email in emails:
-                upsert_email(account_email, email)
+            batch_upsert_emails(account_email, emails)
             total += len(emails)
 
         if progress_callback:
@@ -113,8 +112,7 @@ def incremental_sync(account_email: str, service) -> int:
 
     if added_ids:
         new_emails = fetch_metadata_batch(service, added_ids)
-        for email in new_emails:
-            upsert_email(account_email, email)
+        batch_upsert_emails(account_email, new_emails)
 
     if deleted_ids:
         delete_emails(account_email, deleted_ids)

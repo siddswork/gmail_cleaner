@@ -115,6 +115,31 @@ def upsert_email(account_email: str, email_data: dict) -> None:
     conn.close()
 
 
+def batch_upsert_emails(account_email: str, emails: list[dict]) -> None:
+    """Insert or replace a list of email records in a single transaction."""
+    if not emails:
+        return
+    conn = _connect(account_email)
+    with conn:
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO emails (
+                message_id, thread_id, sender_email, sender_name,
+                subject, date_ts, size_estimate, label_ids,
+                is_read, is_starred, is_important, has_attachments,
+                unsubscribe_url, unsubscribe_post, snippet, fetched_at
+            ) VALUES (
+                :message_id, :thread_id, :sender_email, :sender_name,
+                :subject, :date_ts, :size_estimate, :label_ids,
+                :is_read, :is_starred, :is_important, :has_attachments,
+                :unsubscribe_url, :unsubscribe_post, :snippet, :fetched_at
+            )
+            """,
+            emails,
+        )
+    conn.close()
+
+
 def get_email(account_email: str, message_id: str) -> sqlite3.Row | None:
     """Return the email row for `message_id`, or None if not found."""
     conn = _connect(account_email)
