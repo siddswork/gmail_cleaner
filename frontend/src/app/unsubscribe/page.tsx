@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { useAccounts } from "@/hooks/useAccounts";
 import { api } from "@/lib/api";
 import type { DeadSubscription } from "@/lib/types";
@@ -12,18 +13,22 @@ export default function UnsubscribePage() {
   const [actioned, setActioned] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const router = useRouter();
 
   useEffect(() => {
-    if (!activeAccount) return;
+    if (!activeAccount) {
+      router.replace("/");
+      return;
+    }
     setLoading(true);
     api.unsubscribe.dead(activeAccount, days)
       .then(setSubs)
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [activeAccount, days]);
+  }, [activeAccount, days, router]);
 
   if (!activeAccount) {
-    return <div className="p-8 text-gray-500">Connect a Gmail account from the Home page first.</div>;
+    return null;
   }
 
   const handlePost = async (sub: DeadSubscription) => {

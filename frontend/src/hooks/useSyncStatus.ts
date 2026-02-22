@@ -16,7 +16,14 @@ export function useSyncStatus(account: string | null) {
       const data = JSON.parse(e.data);
       setStatus((prev) =>
         prev
-          ? { ...prev, total_synced: data.total_synced, is_complete: data.is_complete, is_syncing: data.is_syncing }
+          ? {
+              ...prev,
+              total_synced: data.total_synced,
+              is_complete: data.is_complete,
+              is_syncing: data.is_syncing,
+              messages_total: data.messages_total ?? prev.messages_total,
+              sync_started_ts: data.sync_started_ts ?? prev.sync_started_ts,
+            }
           : null,
       );
     };

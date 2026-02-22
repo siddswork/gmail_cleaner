@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { useAccounts } from "@/hooks/useAccounts";
 import { api } from "@/lib/api";
 import type { ReadRateSender, UnreadByLabel, OldestUnreadSender } from "@/lib/types";
@@ -15,19 +16,23 @@ export default function InsightsPage() {
   const [oldest, setOldest] = useState<OldestUnreadSender[]>([]);
   const [rrLimit, setRrLimit] = useState(50);
   const [loading, setLoading] = useState(false);
+  const router = useRouter();
 
   useEffect(() => {
-    if (!activeAccount) return;
+    if (!activeAccount) {
+      router.replace("/");
+      return;
+    }
     setLoading(true);
     Promise.all([
       api.insights.readRate(activeAccount, rrLimit).then(setReadRate),
       api.insights.unreadByLabel(activeAccount).then(setUnreadByLabel),
       api.insights.oldestUnread(activeAccount, 20).then(setOldest),
     ]).finally(() => setLoading(false));
-  }, [activeAccount, rrLimit]);
+  }, [activeAccount, rrLimit, router]);
 
   if (!activeAccount) {
-    return <div className="p-8 text-gray-500">Connect a Gmail account from the Home page first.</div>;
+    return null;
   }
 
   // Convert UnreadByLabel to CategoryInfo shape for CategoryBar

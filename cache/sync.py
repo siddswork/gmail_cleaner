@@ -22,7 +22,7 @@ from cache.database import (
 from gmail.fetcher import fetch_metadata_batch, list_message_ids
 
 
-def full_sync(account_email: str, service, progress_callback=None) -> int:
+def full_sync(account_email: str, service, progress_callback=None, stop_event=None) -> int:
     """
     Fetch all message metadata and write to the SQLite cache.
 
@@ -34,6 +34,8 @@ def full_sync(account_email: str, service, progress_callback=None) -> int:
         account_email:     Account to sync.
         service:           Authenticated Gmail API service.
         progress_callback: Optional callable(total_so_far) called after each page.
+        stop_event:        Optional threading.Event. If set, sync exits at the next
+                           page boundary saving its checkpoint so it can resume.
 
     Returns:
         Total number of messages synced.
@@ -43,12 +45,23 @@ def full_sync(account_email: str, service, progress_callback=None) -> int:
     profile = service.users().getProfile(userId="me").execute()
     history_id = profile["historyId"]
 
+    # Store total messages count for progress bar ETA calculation
+    if "messagesTotal" in profile:
+        set_sync_state(account_email, "messages_total", str(profile["messagesTotal"]))
+
     # Resume from a previous interrupted sync if a checkpoint exists
     page_token = get_sync_state(account_email, "full_sync_page_token")
 
     total = 0
 
     while True:
+        # Check for graceful stop request before processing each page
+        if stop_event is not None and stop_event.is_set():
+            # Save checkpoint so we can resume later
+            if page_token:
+                set_sync_state(account_email, "full_sync_page_token", page_token)
+            return total
+
         result = list_message_ids(service, page_token=page_token)
         ids = result["ids"]
         next_page_token = result["next_page_token"]

@@ -6,11 +6,10 @@ import type { AccountInfo } from "@/lib/types";
 interface AccountContextValue {
   accounts: AccountInfo[];
   activeAccount: string | null;
-  setActiveAccount: (email: string | null) => void;
   loading: boolean;
   refresh: () => Promise<void>;
   connect: () => Promise<void>;
-  remove: (email: string) => Promise<void>;
+  logout: () => Promise<void>;
 }
 
 const AccountContext = createContext<AccountContextValue | null>(null);
@@ -23,11 +22,13 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async () => {
     try {
       const data = await api.auth.accounts();
-      setAccounts(data.accounts);
-      // Auto-select first account if none selected
+      // Filter __new__ client-side as safety net
+      const filtered = data.accounts.filter((a) => a.email !== "__new__");
+      setAccounts(filtered);
+      // Auto-select first account
       setActiveAccount((prev) => {
-        if (prev) return prev; // keep existing selection
-        return data.accounts[0]?.email ?? null;
+        if (prev && filtered.some((a) => a.email === prev)) return prev;
+        return filtered[0]?.email ?? null;
       });
     } catch {
       // backend not yet running
@@ -45,17 +46,15 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     window.open(auth_url, "_blank");
   }, []);
 
-  const remove = useCallback(async (email: string) => {
-    await api.auth.removeAccount(email);
+  const logout = useCallback(async () => {
+    if (!activeAccount) return;
+    await api.auth.logout(activeAccount);
+    setActiveAccount(null);
     await refresh();
-    setActiveAccount((prev) => {
-      if (prev !== email) return prev;
-      return accounts.find((a) => a.email !== email)?.email ?? null;
-    });
-  }, [accounts, refresh]);
+  }, [activeAccount, refresh]);
 
   return (
-    <AccountContext.Provider value={{ accounts, activeAccount, setActiveAccount, loading, refresh, connect, remove }}>
+    <AccountContext.Provider value={{ accounts, activeAccount, loading, refresh, connect, logout }}>
       {children}
     </AccountContext.Provider>
   );

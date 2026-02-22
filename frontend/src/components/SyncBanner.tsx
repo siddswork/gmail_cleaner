@@ -7,16 +7,51 @@ interface Props {
   onStartSync: () => void;
 }
 
+function fmtEta(seconds: number): string {
+  if (seconds < 60) return "< 1 min remaining";
+  const mins = Math.round(seconds / 60);
+  if (mins < 60) return `~${mins} min remaining`;
+  const hrs = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return remMins > 0 ? `~${hrs}h ${remMins}min remaining` : `~${hrs}h remaining`;
+}
+
 export function SyncBanner({ status, onStartSync }: Props) {
   if (!status) return null;
 
   if (status.is_syncing) {
+    const hasTotal = status.messages_total != null && status.messages_total > 0;
+    const pct = hasTotal ? Math.min(100, Math.round((status.total_synced / status.messages_total!) * 100)) : null;
+
+    let eta: string | null = null;
+    if (hasTotal && status.sync_started_ts != null && status.total_synced > 0) {
+      const elapsed = Date.now() / 1000 - status.sync_started_ts;
+      const rate = status.total_synced / elapsed;
+      const remaining = (status.messages_total! - status.total_synced) / rate;
+      if (remaining > 0 && isFinite(remaining)) {
+        eta = fmtEta(remaining);
+      }
+    }
+
     return (
-      <div className="rounded bg-blue-50 border border-blue-200 px-4 py-3 text-sm flex items-center gap-3">
-        <span className="inline-block w-3 h-3 rounded-full bg-blue-500 animate-pulse" />
-        <span>
-          Syncing... {fmtCount(status.total_synced)} emails cached so far.
-        </span>
+      <div className="rounded bg-blue-50 border border-blue-200 px-4 py-3 text-sm">
+        <div className="flex items-center gap-3 mb-2">
+          <span className="inline-block w-3 h-3 rounded-full bg-blue-500 animate-pulse shrink-0" />
+          <span>
+            {hasTotal
+              ? `Syncing… ${fmtCount(status.total_synced)} / ${fmtCount(status.messages_total!)} emails (${pct}%)`
+              : `Syncing… ${fmtCount(status.total_synced)} emails cached so far.`}
+          </span>
+          {eta && <span className="ml-auto text-xs text-blue-500">{eta}</span>}
+        </div>
+        {pct != null && (
+          <div className="w-full bg-blue-200 rounded-full h-1.5">
+            <div
+              className="bg-blue-500 h-1.5 rounded-full transition-all duration-500"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+        )}
       </div>
     );
   }

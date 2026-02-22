@@ -13,6 +13,7 @@ from cache.sync_manager import (
     has_interrupted_sync,
     get_sync_progress,
     start_background_sync,
+    stop_sync,
 )
 
 
@@ -149,7 +150,7 @@ class TestStartBackgroundSync:
         service = MagicMock()
         captured_callback = []
 
-        def capture_full_sync(acct, svc, progress_callback=None):
+        def capture_full_sync(acct, svc, progress_callback=None, stop_event=None):
             captured_callback.append(progress_callback)
 
         with patch("cache.sync_manager.full_sync", side_effect=capture_full_sync):
@@ -162,7 +163,7 @@ class TestStartBackgroundSync:
     def test_progress_callback_writes_to_sync_state(self, account):
         service = MagicMock()
 
-        def run_callback_immediately(acct, svc, progress_callback=None):
+        def run_callback_immediately(acct, svc, progress_callback=None, stop_event=None):
             if progress_callback:
                 progress_callback(1337)
 
@@ -171,3 +172,94 @@ class TestStartBackgroundSync:
             t.join(timeout=2)
 
         assert get_sync_state(account, "total_messages_synced") == "1337"
+
+    def test_start_background_sync_stores_sync_started_ts(self, account):
+        """start_background_sync must write sync_started_ts to sync_state."""
+        service = MagicMock()
+        with patch("cache.sync_manager.full_sync"):
+            t = start_background_sync(account, service)
+            t.join(timeout=2)
+
+        ts = get_sync_state(account, "sync_started_ts")
+        assert ts is not None
+        assert int(ts) > 0
+
+    def test_start_background_sync_passes_stop_event_to_full_sync(self, account):
+        """full_sync must receive a stop_event keyword arg."""
+        import threading
+        service = MagicMock()
+        captured = []
+
+        def capture(acct, svc, progress_callback=None, stop_event=None):
+            captured.append(stop_event)
+
+        with patch("cache.sync_manager.full_sync", side_effect=capture):
+            t = start_background_sync(account, service)
+            t.join(timeout=2)
+
+        assert len(captured) == 1
+        assert isinstance(captured[0], threading.Event)
+
+
+# ---------------------------------------------------------------------------
+# stop_sync
+# ---------------------------------------------------------------------------
+
+class TestStopSync:
+    def test_stop_sync_signals_event(self, account):
+        """stop_sync must set the stop_event for the account."""
+        from cache import sync_manager
+        import threading
+
+        event = threading.Event()
+        sync_manager.stop_events[account] = event
+
+        stop_sync(account)
+        assert event.is_set()
+
+    def test_stop_sync_noop_when_no_event(self, account):
+        """stop_sync should not raise when no event is registered."""
+        stop_sync(account)  # should not raise
+
+    def test_stop_sync_joins_thread_if_running(self, account):
+        """stop_sync waits for sync thread to finish."""
+        from cache import sync_manager
+        import threading
+
+        event = threading.Event()
+        sync_manager.stop_events[account] = event
+
+        finished = []
+        def slow_worker():
+            event.wait()
+            finished.append(True)
+
+        t = threading.Thread(target=slow_worker, daemon=True)
+        t.start()
+
+        stop_sync(account, thread=t, timeout=2)
+        assert finished  # thread completed
+
+
+# ---------------------------------------------------------------------------
+# get_sync_progress — messages_total and sync_started_ts
+# ---------------------------------------------------------------------------
+
+class TestGetSyncProgressExtended:
+    def test_messages_total_returned_when_set(self, account):
+        set_sync_state(account, "messages_total", "190000")
+        result = get_sync_progress(account)
+        assert result["messages_total"] == 190000
+
+    def test_messages_total_none_when_absent(self, account):
+        result = get_sync_progress(account)
+        assert result["messages_total"] is None
+
+    def test_sync_started_ts_returned_when_set(self, account):
+        set_sync_state(account, "sync_started_ts", "1700000000")
+        result = get_sync_progress(account)
+        assert result["sync_started_ts"] == 1700000000
+
+    def test_sync_started_ts_none_when_absent(self, account):
+        result = get_sync_progress(account)
+        assert result["sync_started_ts"] is None

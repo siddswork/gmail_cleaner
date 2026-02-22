@@ -27,6 +27,8 @@ export const api = {
     connect: () => request<{ auth_url: string; state: string }>("/api/auth/connect", { method: "POST" }),
     removeAccount: (email: string) =>
       request<{ message: string }>(`/api/auth/accounts/${encodeURIComponent(email)}`, { method: "DELETE" }),
+    logout: (email: string) =>
+      request<{ message: string }>(`/api/auth/accounts/${encodeURIComponent(email)}/logout`, { method: "POST" }),
   },
 
   sync: {

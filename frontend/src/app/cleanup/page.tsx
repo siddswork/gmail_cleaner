@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useCleanup } from "@/hooks/useCleanup";
 import { api } from "@/lib/api";
@@ -16,14 +17,18 @@ export default function CleanupPage() {
   const { activeAccount } = useAccounts();
   const { state, preview, result, error, doPreview, doExecute, reset } = useCleanup(activeAccount);
   const [topSenders, setTopSenders] = useState<SenderInfo[]>([]);
+  const router = useRouter();
 
   useEffect(() => {
-    if (!activeAccount) return;
+    if (!activeAccount) {
+      router.replace("/");
+      return;
+    }
     api.dashboard.topSenders(activeAccount, "count", 50).then(setTopSenders).catch(() => {});
-  }, [activeAccount]);
+  }, [activeAccount, router]);
 
   if (!activeAccount) {
-    return <div className="p-8 text-gray-500">Connect a Gmail account from the Home page first.</div>;
+    return null;
   }
 
   return (

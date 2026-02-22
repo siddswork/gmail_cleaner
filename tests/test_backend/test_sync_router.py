@@ -44,3 +44,27 @@ class TestSyncRoutes:
         resp = client.post(f"/api/sync/start?account={email}")
         assert resp.status_code == 200
         assert resp.json()["already_running"] is True
+
+    def test_status_includes_messages_total(self, client, connected_account):
+        from cache.database import set_sync_state
+        email, _ = connected_account
+        set_sync_state(email, "messages_total", "190000")
+
+        resp = client.get(f"/api/sync/status?account={email}")
+        assert resp.status_code == 200
+        assert resp.json()["messages_total"] == 190000
+
+    def test_status_messages_total_none_when_absent(self, client, connected_account):
+        email, _ = connected_account
+        resp = client.get(f"/api/sync/status?account={email}")
+        assert resp.status_code == 200
+        assert resp.json()["messages_total"] is None
+
+    def test_status_includes_sync_started_ts(self, client, connected_account):
+        from cache.database import set_sync_state
+        email, _ = connected_account
+        set_sync_state(email, "sync_started_ts", "1700000000")
+
+        resp = client.get(f"/api/sync/status?account={email}")
+        assert resp.status_code == 200
+        assert resp.json()["sync_started_ts"] == 1700000000

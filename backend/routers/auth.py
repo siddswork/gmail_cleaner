@@ -16,6 +16,7 @@ from auth.oauth import (
 from backend import state
 from backend.models.schemas import AccountInfo, AccountsResponse, ConnectResponse
 from cache.database import init_db
+from cache.sync_manager import stop_sync
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -32,7 +33,7 @@ def list_accounts():
     accounts = []
     if root.exists():
         for d in sorted(root.iterdir()):
-            if d.is_dir() and (d / "token.json").exists():
+            if d.is_dir() and (d / "token.json").exists() and d.name != "__new__":
                 email = d.name
                 accounts.append(AccountInfo(email=email, has_token=True))
                 # Auto-load service if not already in memory
@@ -92,3 +93,24 @@ def remove_account(email: str):
     state.gmail_services.pop(email, None)
     state.sync_threads.pop(email, None)
     return {"message": f"Account '{email}' removed from session"}
+
+
+@router.post("/accounts/{email}/logout")
+def logout_account(email: str):
+    """
+    Log out the account: stop any running sync and remove from in-memory state.
+
+    Does NOT delete data/<email>/ — tokens persist for re-login.
+    Returns 404 if the account is not currently connected.
+    """
+    if email not in state.gmail_services:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"Account '{email}' is not connected")
+
+    thread = state.sync_threads.get(email)
+    stop_sync(email, thread=thread)
+
+    state.gmail_services.pop(email, None)
+    state.sync_threads.pop(email, None)
+
+    return {"message": "Logged out"}

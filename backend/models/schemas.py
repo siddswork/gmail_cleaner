@@ -33,6 +33,8 @@ class SyncStatusResponse(BaseModel):
     last_full_sync_ts: int | None
     needs_full_sync: bool
     is_syncing: bool
+    messages_total: int | None
+    sync_started_ts: int | None
 
 
 class SyncStartResponse(BaseModel):
