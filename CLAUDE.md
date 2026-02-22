@@ -225,41 +225,47 @@ streamlit run app.py
 ---
 
 ## Last Session
-**Date**: 2026-02-21
+**Date**: 2026-02-22
 
 ### What We Were Trying to Accomplish
-Kickstart a brand new Gmail cleanup tool from scratch — a personal web app to help reclaim storage on a 20-year-old Gmail account nearing capacity, with support for 2-3 family accounts.
+Implement Phase 3 (Dashboard) and the background sync feature (task #5) using strict TDD.
 
 ### What Was Completed
-- **Git initialized** with `main` branch; remote set to `https://github.com/siddswork/gmail_cleaner`
-- **Architecture decisions finalized** (all made with Opus):
-  - Streamlit over React or FastAPI — fastest path to a working personal tool
-  - No FastAPI — Streamlit calls Gmail API directly
-  - SQLite per-account cache
-  - `gmail.modify` scope only — permanent delete impossible at API level
-  - Multi-account support (up to 3 family accounts, shared GCP OAuth client)
-  - No LLMs in v1 — basic aggregation/pandas is sufficient
-  - TDD workflow mandated (user added this to CLAUDE.md)
-- **Plan written and approved** — 5 implementation phases fully designed (see Implementation Phases above)
-- **`CLAUDE.md` created** with full project instructions, schema, safety rules, and model usage preferences (user modified to add TDD rules and planning mode prompts)
-- **`MEMORY.md` seeded** at `~/.claude/projects/.../memory/MEMORY.md`
+
+**Phase 3 — Dashboard (fully complete):**
+- `analysis/aggregator.py` — `top_senders_by_count`, `top_senders_by_size`, `category_breakdown`, `storage_timeline` (month/year granularity), `overall_stats`. All cleanup-oriented views exclude starred/important; `overall_stats` reports full picture. Pure SQL over SQLite cache, returns `list[dict]`.
+- `components/filters.py` — `apply_filters(df, filters)`: pure pandas function supporting `start_ts`, `end_ts`, `sender` (case-insensitive substring on email+name), `labels` (union match on JSON array), `min_size`, `max_size`, `unread_only`. Streamlit widget helpers (`date_range_filter`, `sender_filter`, `label_filter`, `size_filter`) are UI-only, not unit tested.
+- `components/charts.py` — `senders_bar(data, metric)`, `category_bar(data, metric)`, `timeline_line(data)`. All return Plotly figures. All handle empty data gracefully with a "No data — run a sync first" annotation. `timeline_line` uses dual Y-axes (count left, cumulative size right).
+- `pages/1_Dashboard.py` — Full dashboard: 5-metric header row, sidebar filters, Top Senders tabs (by count / by size with chart + table each), Category breakdown (count + size side-by-side), Timeline with month/year toggle. Guards against empty cache with early `st.stop()`.
+
+**Background sync (task #5, fully complete):**
+- `cache/sync_manager.py` — `needs_full_sync(account_email)`, `has_interrupted_sync(account_email)` (treats both Python `None` and string `"None"` as absent), `get_sync_progress(account_email)` (returns `{total_synced, is_complete, page_token, last_full_sync_ts}`), `start_background_sync(account_email, service)` (daemon thread running `full_sync` with a callback that writes `total_messages_synced` to sync_state).
+- `app.py` updated — `sync_thread` added to session state defaults. `_add_account` now auto-starts background sync if `needs_full_sync`. Main area shows three states: thread alive (live counter + 3s rerun loop), thread just finished (success banner), interrupted sync (warning + Resume button).
+
+**Test counts:**
+- `tests/test_aggregator.py` — 26 tests
+- `tests/test_filters.py` — 30 tests
+- `tests/test_sync_manager.py` — 18 tests
+- **177 tests total, all passing**
+
+**Not yet committed** — all Phase 3 changes are unstaged. Files added this session:
+`analysis/aggregator.py`, `analysis/__init__.py`, `components/filters.py`, `components/charts.py`, `components/__init__.py`, `cache/sync_manager.py`, `pages/1_Dashboard.py`, `tests/test_aggregator.py`, `tests/test_filters.py`, `tests/test_sync_manager.py`, `app.py` (modified).
 
 ### What Is In Progress
-Nothing is in progress — the project directory is **empty except for `CLAUDE.md`**. No code has been written yet.
+Nothing. Phase 3 + background sync are fully implemented and all 177 tests pass. Not yet committed to git.
 
 ### Known Issues / Blockers
-- **GCP project not yet created** — the user needs to create a Google Cloud project, enable the Gmail API, and download `client_secret.json` before the OAuth flow can work. This is a prerequisite for Phase 1 testing.
-- No `requirements.txt`, no virtual environment set up yet.
+- **GCP project not yet set up** — `client_secret.json` still missing. OAuth flow untested against a real account. All logic is covered by unit tests.
+- `app.py` `_add_account` rough edge still present (authenticates as `"__new__"` first, then re-authenticates under real email). Will be cleaned up once GCP is live.
+- `app.py` sync progress banner uses `time.sleep(3)` + `st.rerun()` as a polling loop — works but is not ideal. Can be replaced with `st_autorefresh` component later if desired.
 
 ### Exact Next Step to Resume
-**Start Phase 1: Foundation** — following TDD workflow.
+1. **Commit Phase 3 work** before starting Phase 4.
+2. **Start Phase 4: Cleanup** — following TDD workflow.
 
-Order of work:
-1. Write failing tests for `cache/database.py` (schema creation, CRUD) → show to user → get confirmation → implement
-2. Write failing tests for `auth/oauth.py` (token load/save, multi-account path resolution) → show → confirm → implement
-3. Write `config/settings.py` (no tests needed — just constants)
-4. Write `requirements.txt`
-5. Write `.gitignore`
-6. Write `app.py` skeleton (auth flow, account switcher, sync status)
+Order of work for Phase 4:
+1. Write failing tests for `gmail/actions.py` (`trash_messages`, `unsubscribe_via_post`, `unsubscribe_via_url`) → show → confirm → implement
+2. Write failing tests for `components/safety.py` (`live_label_check`, `confirm_trash_dialog`, `large_batch_guard`) → show → confirm → implement
+3. Wire up `pages/2_Cleanup.py` (no tests — Streamlit UI): sender picker, preview (count + size), confirmation dialog, execute + update SQLite immediately after trash
 
-**Reminder before starting**: Per CLAUDE.md, ask the user if they want to switch to Opus for planning, or confirm Sonnet is fine for coding and proceed with TDD.
+**Reminder**: Before planning Phase 4 architecture, ask user if they want to switch to Opus per CLAUDE.md model usage preference.
