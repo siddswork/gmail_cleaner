@@ -43,12 +43,18 @@ export function Sidebar() {
               {label}
             </Link>
           ))}
+          <button
+            onClick={logout}
+            className="w-full text-left px-3 py-2 rounded text-sm text-gray-400 hover:bg-gray-700 hover:text-white transition-colors"
+          >
+            Log out
+          </button>
         </nav>
       )}
 
       {/* Sync status indicator */}
       {status?.is_syncing && (
-        <div className="mt-4 pt-4 border-t border-gray-700">
+        <div className="mt-auto pt-4 border-t border-gray-700">
           <div className="flex items-center gap-2 text-xs text-blue-300">
             <span className="inline-block w-2 h-2 rounded-full bg-blue-400 animate-pulse shrink-0" />
             <span>Syncing… {fmtCount(status.total_synced)} cached</span>
@@ -56,20 +62,8 @@ export function Sidebar() {
         </div>
       )}
       {status?.is_complete && !status.is_syncing && (
-        <div className="mt-4 pt-4 border-t border-gray-700">
-          <p className="text-xs text-green-400">{fmtCount(status.total_synced)} emails synced</p>
-        </div>
-      )}
-
-      {/* Logout — only when logged in */}
-      {activeAccount && (
         <div className="mt-auto pt-4 border-t border-gray-700">
-          <button
-            onClick={logout}
-            className="w-full text-left px-3 py-2 rounded text-sm text-gray-400 hover:bg-gray-700 hover:text-white transition-colors"
-          >
-            Log out
-          </button>
+          <p className="text-xs text-green-400">{fmtCount(status.total_synced)} emails synced</p>
         </div>
       )}
     </aside>
