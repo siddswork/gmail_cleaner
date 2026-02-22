@@ -117,7 +117,7 @@ function Dashboard({ account }: { account: string }) {
           <MetricCard label="Total size" value={fmtSize(stats.total_size)} />
           <MetricCard label="Unread" value={fmtCount(stats.unread_count)} />
           <MetricCard label="Starred" value={fmtCount(stats.starred_count)} />
-          <MetricCard label="Oldest email" value={fmtDate(stats.oldest_ts)} />
+          <MetricCard label="Cache size" value={fmtSize(stats.db_size_bytes)} />
           <MetricCard label="Newest email" value={fmtDate(stats.newest_ts)} />
           <MetricCard label="Read" value={fmtCount(stats.read_count)} />
           <MetricCard label="Important" value={fmtCount(stats.important_count)} />

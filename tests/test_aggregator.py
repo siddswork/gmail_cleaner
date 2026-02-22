@@ -337,3 +337,43 @@ class TestOverallStats:
         # All 3 emails counted in totals
         assert result["total_count"] == 3
         assert result["total_size"] == 600
+
+    def test_oldest_ts_ignores_zero_dates(self, account):
+        """Emails with date_ts=0 (parse failure) must not be returned as oldest."""
+        upsert_email(account, _make_email("m1", date_ts=0))        # bad parse
+        upsert_email(account, _make_email("m2", date_ts=1000000))  # real date
+
+        result = overall_stats(account)
+        assert result["oldest_ts"] == 1000000
+
+    def test_newest_ts_ignores_zero_dates(self, account):
+        upsert_email(account, _make_email("m1", date_ts=0))
+        upsert_email(account, _make_email("m2", date_ts=1000000))
+
+        result = overall_stats(account)
+        assert result["newest_ts"] == 1000000
+
+    def test_oldest_ts_none_when_all_dates_are_zero(self, account):
+        upsert_email(account, _make_email("m1", date_ts=0))
+
+        result = overall_stats(account)
+        assert result["oldest_ts"] is None
+
+    def test_returns_db_size_bytes(self, account):
+        """overall_stats must include the SQLite file size in bytes."""
+        upsert_email(account, _make_email("m1"))
+        result = overall_stats(account)
+        assert "db_size_bytes" in result
+        assert result["db_size_bytes"] > 0
+
+
+class TestStorageTimelineZeroDates:
+    def test_excludes_zero_date_ts_from_timeline(self, account):
+        """Emails with date_ts=0 must not appear as a 1970 bucket."""
+        upsert_email(account, _make_email("m1", date_ts=0))
+        upsert_email(account, _make_email("m2", date_ts=1704067200))  # 2024-01-01
+
+        result = storage_timeline(account)
+        periods = [r["period"] for r in result]
+        assert "1970-01" not in periods
+        assert len(result) == 1

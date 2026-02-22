@@ -8,7 +8,7 @@ frontend can poll it without touching thread internals.
 import threading
 import time
 
-from cache.database import get_sync_state, set_sync_state
+from cache.database import get_sync_state, set_sync_state, get_email_count
 from cache.sync import full_sync
 
 # Per-account stop events — set to signal a running sync to stop gracefully.
@@ -44,14 +44,20 @@ def get_sync_progress(account_email: str) -> dict:
             sync_started_ts:   int | None — Unix timestamp when sync started
         }
     """
-    raw_total = get_sync_state(account_email, "total_messages_synced")
     raw_ts = get_sync_state(account_email, "last_full_sync_ts")
     raw_token = get_sync_state(account_email, "full_sync_page_token")
     raw_messages_total = get_sync_state(account_email, "messages_total")
     raw_started_ts = get_sync_state(account_email, "sync_started_ts")
 
+    # Always read actual row count from the DB — this is accurate regardless
+    # of whether a previous sync run wrote to sync_state or was interrupted.
+    try:
+        total_synced = get_email_count(account_email)
+    except Exception:
+        total_synced = 0
+
     return {
-        "total_synced": int(raw_total) if raw_total else 0,
+        "total_synced": total_synced,
         "is_complete": raw_ts is not None,
         "page_token": raw_token if raw_token and raw_token != "None" else None,
         "last_full_sync_ts": int(raw_ts) if raw_ts else None,

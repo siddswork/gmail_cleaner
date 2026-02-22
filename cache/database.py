@@ -183,6 +183,18 @@ def log_action(account_email: str, action_data: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Counts
+# ---------------------------------------------------------------------------
+
+def get_email_count(account_email: str) -> int:
+    """Return the total number of rows in the emails table."""
+    conn = _connect(account_email)
+    row = conn.execute("SELECT COUNT(*) AS n FROM emails").fetchone()
+    conn.close()
+    return row["n"]
+
+
+# ---------------------------------------------------------------------------
 # Sync state
 # ---------------------------------------------------------------------------
 

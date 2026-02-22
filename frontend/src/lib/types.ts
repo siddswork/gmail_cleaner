@@ -25,6 +25,7 @@ export interface OverallStats {
   important_count: number;
   oldest_ts: number | null;
   newest_ts: number | null;
+  db_size_bytes: number;
 }
 
 export interface SenderInfo {

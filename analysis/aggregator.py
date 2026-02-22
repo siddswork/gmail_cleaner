@@ -7,10 +7,11 @@ exclude starred and important emails.
 overall_stats reports the full picture including starred/important.
 """
 import json
+import os
 import sqlite3
 from datetime import datetime, timezone
 
-from cache.database import _connect
+from cache.database import _connect, get_db_path
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +106,7 @@ def storage_timeline(account_email: str, granularity: str = "month") -> list[dic
         """
         SELECT date_ts, size_estimate
         FROM emails
-        WHERE is_starred = 0 AND is_important = 0
+        WHERE is_starred = 0 AND is_important = 0 AND date_ts > 0
         ORDER BY date_ts ASC
         """,
     ).fetchall()
@@ -148,10 +149,15 @@ def overall_stats(account_email: str) -> dict:
             COALESCE(SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END), 0)    AS unread_count,
             COALESCE(SUM(CASE WHEN is_starred = 1 THEN 1 ELSE 0 END), 0) AS starred_count,
             COALESCE(SUM(CASE WHEN is_important = 1 THEN 1 ELSE 0 END), 0) AS important_count,
-            MIN(date_ts) AS oldest_ts,
-            MAX(date_ts) AS newest_ts
+            MIN(CASE WHEN date_ts > 0 THEN date_ts END) AS oldest_ts,
+            MAX(CASE WHEN date_ts > 0 THEN date_ts END) AS newest_ts
         FROM emails
         """,
     ).fetchone()
     conn.close()
-    return dict(row)
+    result = dict(row)
+    try:
+        result["db_size_bytes"] = os.path.getsize(get_db_path(account_email))
+    except OSError:
+        result["db_size_bytes"] = 0
+    return result

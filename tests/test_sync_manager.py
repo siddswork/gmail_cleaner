@@ -89,10 +89,28 @@ class TestGetSyncProgress:
         assert result["page_token"] is None
         assert result["last_full_sync_ts"] is None
 
-    def test_returns_total_synced(self, account):
-        set_sync_state(account, "total_messages_synced", "4200")
+    def test_total_synced_reflects_actual_db_count(self, account):
+        """total_synced must match COUNT(*) from the emails table, not sync_state."""
+        from cache.database import upsert_email
+        import json
+        for i in range(3):
+            upsert_email(account, {
+                "message_id": f"m{i}", "thread_id": f"t{i}",
+                "sender_email": "a@b.com", "sender_name": "A",
+                "subject": "S", "date_ts": 1700000000, "size_estimate": 100,
+                "label_ids": json.dumps(["INBOX"]), "is_read": True,
+                "is_starred": False, "is_important": False,
+                "has_attachments": False, "unsubscribe_url": None,
+                "unsubscribe_post": None, "snippet": "", "fetched_at": 1700000000,
+            })
+        # Even if sync_state says something different, DB count wins
+        set_sync_state(account, "total_messages_synced", "999")
         result = get_sync_progress(account)
-        assert result["total_synced"] == 4200
+        assert result["total_synced"] == 3
+
+    def test_total_synced_zero_when_no_emails(self, account):
+        result = get_sync_progress(account)
+        assert result["total_synced"] == 0
 
     def test_is_complete_true_when_last_full_sync_ts_set(self, account):
         set_sync_state(account, "last_full_sync_ts", "1700000000")

@@ -55,6 +55,7 @@ class OverallStatsResponse(BaseModel):
     important_count: int
     oldest_ts: int | None
     newest_ts: int | None
+    db_size_bytes: int
 
 
 class SenderInfo(BaseModel):
