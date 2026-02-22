@@ -56,10 +56,14 @@ class RateLimiter:
         self._units_in_window += units
 
 
-def execute_with_retry(request, max_attempts: int = 5, base_delay: float = 1.0):
+def execute_with_retry(request, max_attempts: int = 8, base_delay: float = 2.0):
     """
-    Execute a Gmail API request, retrying on 429 / 500 / 503 with
-    exponential backoff. Raises immediately on any other HttpError.
+    Execute a Gmail API request, retrying on transient errors with
+    exponential backoff.
+
+    - 429 / 500 / 503: standard backoff (base_delay * 2^attempt)
+    - 403 rateLimitExceeded: minimum 60s wait (per-minute quota window)
+    - any other HttpError: raised immediately
     """
     last_exc = None
     for attempt in range(max_attempts):
@@ -67,13 +71,15 @@ def execute_with_retry(request, max_attempts: int = 5, base_delay: float = 1.0):
             return request.execute()
         except HttpError as exc:
             status = exc.resp.status
-            if status not in RETRYABLE_STATUS_CODES:
-                if status == 403 and _is_rate_limit_403(exc):
-                    pass  # fall through to retry
-                else:
-                    raise
+            if status in RETRYABLE_STATUS_CODES:
+                delay = base_delay * (2 ** attempt)
+            elif status == 403 and _is_rate_limit_403(exc):
+                # Gmail per-minute quota — must wait for the window to reset
+                delay = max(60.0, base_delay * (2 ** attempt))
+            else:
+                raise
             last_exc = exc
-            time.sleep(base_delay * (2 ** attempt))
+            time.sleep(delay)
     raise last_exc
 
 

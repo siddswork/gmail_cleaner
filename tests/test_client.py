@@ -138,8 +138,20 @@ class TestExecuteWithRetry:
         request.execute.side_effect = make_http_error(429)
         with patch("time.sleep"):
             with pytest.raises(HttpError):
-                execute_with_retry(request, max_attempts=3)
+                execute_with_retry(request, max_attempts=3, base_delay=1.0)
         assert request.execute.call_count == 3
+
+    def test_403_rate_limit_waits_at_least_60_seconds(self):
+        """Per-minute quota reset requires at least 60s wait on first retry."""
+        request = MagicMock()
+        request.execute.side_effect = [
+            make_http_error(403, reason="rateLimitExceeded"),
+            {"id": "ok"},
+        ]
+        with patch("time.sleep") as mock_sleep:
+            execute_with_retry(request, base_delay=2.0)
+        delay = mock_sleep.call_args_list[0].args[0]
+        assert delay >= 60.0
 
     def test_exponential_backoff_delays_increase(self):
         request = MagicMock()
