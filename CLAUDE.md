@@ -228,47 +228,43 @@ streamlit run app.py
 **Date**: 2026-02-22
 
 ### What We Were Trying to Accomplish
-Complete Phase 4 (Cleanup) using strict TDD, then commit and push everything cleanly.
+Complete Phase 5 (Unsubscribe & Insights) — the final phase — using strict TDD for the service layer, then build the two Streamlit UI pages and push everything.
 
 ### What Was Completed
 
-**Phase 4 — Cleanup service layer (fully complete, committed):**
-- `gmail/actions.py` — `trash_messages(account_email, service, message_ids)`: calls `batchModify` in chunks of 1000, queries sizes from cache before trashing, deletes cache rows + logs action only after all API calls succeed. `unsubscribe_via_post(url, post_body)`: RFC 8058 POST, catches network errors, returns bool. `unsubscribe_via_url(url)`: pass-through returning URL or None.
-- `components/safety.py` — `live_label_check(service, message_ids)`: per-message API re-fetch (`format=minimal, fields=id,labelIds`), partitions into `{safe, blocked, errors}`. `is_large_batch(count)`: predicate against `LARGE_BATCH_THRESHOLD`. `confirm_trash_dialog`, `large_batch_guard`: Streamlit UI (not unit tested).
-- `tests/test_actions.py` — 15 tests. `tests/test_safety.py` — 13 tests.
-- **205 tests total, all passing.**
+**Phase 5 — Insights service layer (TDD, committed `f99209e`):**
+- `analysis/insights.py` — three functions:
+  - `dead_subscriptions(account_email, days)`: senders with unsubscribe URLs where ALL emails are unread and most recent email is older than `days`. Uses correlated subquery to return `unsubscribe_url` from the most recent email (not lexicographic MAX). Ordered by count descending. Excludes starred/important.
+  - `read_rate_by_sender(account_email, limit)`: per-sender read rate (`read_count / total_count`), ordered by total email count descending. Excludes starred/important.
+  - `unread_by_label(account_email)`: unread count + total size per `CATEGORY_*` label, sorted by category name. Python-side aggregation (mirrors `category_breakdown` pattern). Excludes starred/important.
+- `tests/test_insights.py` — 26 tests, all passing.
+- **231 tests total, all passing.**
 
-**Performance fix — `batch_upsert_emails` (committed with Phase 4):**
-- `cache/database.py`: added `batch_upsert_emails(account_email, emails)` — single connection, one `executemany` in one transaction. Replaces the 1-connection-per-row pattern.
-- `cache/sync.py`: full sync and incremental sync now call `batch_upsert_emails` (eliminates per-email connection overhead; previously would have been very slow for 190k-email syncs).
-- `tests/test_sync.py`: updated 4 patches from `upsert_email` → `batch_upsert_emails`.
+**Phase 5 — UI pages (committed `d61a43d`):**
+- `pages/3_Unsubscribe.py` — Sidebar: days slider (7–365, default 30). Main: dead subscription list with metrics (total / pending / actioned). Per-sender bordered card showing name, count, size, last email date. Three action buttons per card: **POST unsub** (calls `unsubscribe_via_post`, disabled if no `List-Unsubscribe-Post` header), **Open URL** (`st.link_button`), **Skip**. Session state `unsub_actioned` (set of sender_emails) persists actions across reruns; sidebar "Reset actioned list" button.
+- `pages/4_Insights.py` — Three sections: (1) **Read Rate by Sender**: sidebar limit slider, horizontal bar chart colour-coded green/red by rate + table with read/unread/total/rate columns. (2) **Unread by Category**: dual bar charts (count + size) + summary table. (3) **Oldest Unread Senders**: inline SQL query (`_oldest_unread_senders`), table showing sender, unread count, size, date of last unread email.
 
-**Phase 4 — Cleanup UI (fully complete, committed):**
-- `pages/2_Cleanup.py` — Sidebar: top-50 sender selectbox + manual text input, date range, label multiselect, unread-only, min size. Main: top senders reference table, preview card (count + size, starred/important excluded), batch-size warning if >5k. Session-state-driven flow: select → confirm (large_batch_guard + confirm_trash_dialog) → execute (incremental sync → live_label_check → trash_messages → result banner). `last_trash_result` persists result across reruns.
-
-**Git state — all committed and pushed:**
-- `694d77b` — Phase 4 service layer + performance fix (205 tests)
-- `6a06e00` — Phase 4 Cleanup UI
+**Git state — all committed and pushed to `origin/main`:**
+- `f99209e` — Phase 5 insights service layer (231 tests)
+- `d61a43d` — Phase 5 UI pages (3_Unsubscribe, 4_Insights)
+- Working tree is clean. Remote is up to date.
 
 ### What Is In Progress
-Nothing. Phases 1–4 are fully implemented, tested, committed, and pushed. Working tree is clean.
+Nothing. All 5 phases are fully implemented, tested, committed, and pushed.
 
 ### Known Issues / Blockers
-- **GCP project not yet set up** — `client_secret.json` missing. User has decided to set this up after Phase 5 is complete. All logic is covered by unit tests.
+- **GCP project not yet set up** — `client_secret.json` missing at `auth/credentials/client_secret.json`. This is the only thing blocking a live run. All logic is covered by unit tests.
 - `app.py` `_add_account` rough edge: authenticates as `"__new__"` first, then re-authenticates under real email. Will be cleaned up once GCP is live.
-- `app.py` sync progress banner uses `time.sleep(3)` + `st.rerun()` as a polling loop — acceptable for now; can be replaced with `st_autorefresh` later.
+- `app.py` sync progress banner uses `time.sleep(3)` + `st.rerun()` as a polling loop — acceptable for now.
+- `test_safety.py::TestLiveLabelCheck::test_all_safe_messages` takes ~0.25s (vs <0.09s for others) — not a bug, it's first-import cost of `streamlit` since all imports are inside method bodies. Total suite time unaffected.
 
 ### Exact Next Step to Resume
-**Start Phase 5: Unsubscribe & Insights** — the final phase.
+**Set up GCP and run the app for the first time.**
 
-Before planning, follow CLAUDE.md model preference: prompt user to switch to Opus.
-
-Order of work for Phase 5:
-1. **`analysis/insights.py`** (TDD) — functions for read behavior and subscription analysis:
-   - `dead_subscriptions(account_email, days)`: senders with unsubscribe URLs where all emails are unread and last email is older than `days`
-   - `read_rate_by_sender(account_email, limit)`: per-sender read rate (read_count / total_count), ordered by most emails
-   - `unread_by_label(account_email)`: unread count + size per label category
-2. **`pages/3_Unsubscribe.py`** (no tests — Streamlit UI): list dead subscriptions, one-click POST unsubscribe or open URL in browser, mark as actioned
-3. **`pages/4_Insights.py`** (no tests — Streamlit UI): read-rate table + chart, unread-by-label breakdown, oldest-unread senders
-
-**Reminder**: Before planning Phase 5 architecture, ask user if they want to switch to Opus per CLAUDE.md model usage preference.
+Steps:
+1. Go to [console.cloud.google.com](https://console.cloud.google.com), create a project, enable **Gmail API**.
+2. Create OAuth 2.0 credentials → Desktop app → download JSON → save as `auth/credentials/client_secret.json`.
+3. Add your Gmail address as a test user (OAuth consent screen → Test users).
+4. Run `streamlit run app.py`, click "Add account", complete OAuth flow in browser.
+5. Kick off the first full sync — expect ~90–120 minutes for ~190k emails. Progress bar is shown; sync is resumable if interrupted.
+6. After sync completes, explore Dashboard → Cleanup → Unsubscribe → Insights.
