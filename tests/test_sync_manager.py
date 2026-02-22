@@ -119,21 +119,21 @@ class TestStartBackgroundSync:
         service = MagicMock()
         with patch("cache.sync_manager.full_sync"):
             t = start_background_sync(account, service)
+            t.join(timeout=2)
         assert isinstance(t, threading.Thread)
 
     def test_thread_is_daemon(self, account):
         service = MagicMock()
         with patch("cache.sync_manager.full_sync"):
             t = start_background_sync(account, service)
-        assert t.daemon is True
+            assert t.daemon is True
+            t.join(timeout=2)
 
     def test_thread_is_started(self, account):
         service = MagicMock()
         with patch("cache.sync_manager.full_sync"):
             t = start_background_sync(account, service)
-        # A started thread is alive or has already finished (if very fast)
-        # is_alive() may be False if the mock returned instantly — use is_alive or check via join
-        t.join(timeout=2)
+            t.join(timeout=2)
         # If join returns within 2s the thread ran and completed — that's correct behavior
 
     def test_thread_calls_full_sync_with_correct_args(self, account):
