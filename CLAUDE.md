@@ -228,44 +228,47 @@ streamlit run app.py
 **Date**: 2026-02-22
 
 ### What We Were Trying to Accomplish
-Implement Phase 3 (Dashboard) and the background sync feature (task #5) using strict TDD.
+Complete Phase 4 (Cleanup) using strict TDD, then commit and push everything cleanly.
 
 ### What Was Completed
 
-**Phase 3 — Dashboard (fully complete):**
-- `analysis/aggregator.py` — `top_senders_by_count`, `top_senders_by_size`, `category_breakdown`, `storage_timeline` (month/year granularity), `overall_stats`. All cleanup-oriented views exclude starred/important; `overall_stats` reports full picture. Pure SQL over SQLite cache, returns `list[dict]`.
-- `components/filters.py` — `apply_filters(df, filters)`: pure pandas function supporting `start_ts`, `end_ts`, `sender` (case-insensitive substring on email+name), `labels` (union match on JSON array), `min_size`, `max_size`, `unread_only`. Streamlit widget helpers (`date_range_filter`, `sender_filter`, `label_filter`, `size_filter`) are UI-only, not unit tested.
-- `components/charts.py` — `senders_bar(data, metric)`, `category_bar(data, metric)`, `timeline_line(data)`. All return Plotly figures. All handle empty data gracefully with a "No data — run a sync first" annotation. `timeline_line` uses dual Y-axes (count left, cumulative size right).
-- `pages/1_Dashboard.py` — Full dashboard: 5-metric header row, sidebar filters, Top Senders tabs (by count / by size with chart + table each), Category breakdown (count + size side-by-side), Timeline with month/year toggle. Guards against empty cache with early `st.stop()`.
+**Phase 4 — Cleanup service layer (fully complete, committed):**
+- `gmail/actions.py` — `trash_messages(account_email, service, message_ids)`: calls `batchModify` in chunks of 1000, queries sizes from cache before trashing, deletes cache rows + logs action only after all API calls succeed. `unsubscribe_via_post(url, post_body)`: RFC 8058 POST, catches network errors, returns bool. `unsubscribe_via_url(url)`: pass-through returning URL or None.
+- `components/safety.py` — `live_label_check(service, message_ids)`: per-message API re-fetch (`format=minimal, fields=id,labelIds`), partitions into `{safe, blocked, errors}`. `is_large_batch(count)`: predicate against `LARGE_BATCH_THRESHOLD`. `confirm_trash_dialog`, `large_batch_guard`: Streamlit UI (not unit tested).
+- `tests/test_actions.py` — 15 tests. `tests/test_safety.py` — 13 tests.
+- **205 tests total, all passing.**
 
-**Background sync (task #5, fully complete):**
-- `cache/sync_manager.py` — `needs_full_sync(account_email)`, `has_interrupted_sync(account_email)` (treats both Python `None` and string `"None"` as absent), `get_sync_progress(account_email)` (returns `{total_synced, is_complete, page_token, last_full_sync_ts}`), `start_background_sync(account_email, service)` (daemon thread running `full_sync` with a callback that writes `total_messages_synced` to sync_state).
-- `app.py` updated — `sync_thread` added to session state defaults. `_add_account` now auto-starts background sync if `needs_full_sync`. Main area shows three states: thread alive (live counter + 3s rerun loop), thread just finished (success banner), interrupted sync (warning + Resume button).
+**Performance fix — `batch_upsert_emails` (committed with Phase 4):**
+- `cache/database.py`: added `batch_upsert_emails(account_email, emails)` — single connection, one `executemany` in one transaction. Replaces the 1-connection-per-row pattern.
+- `cache/sync.py`: full sync and incremental sync now call `batch_upsert_emails` (eliminates per-email connection overhead; previously would have been very slow for 190k-email syncs).
+- `tests/test_sync.py`: updated 4 patches from `upsert_email` → `batch_upsert_emails`.
 
-**Test counts:**
-- `tests/test_aggregator.py` — 26 tests
-- `tests/test_filters.py` — 30 tests
-- `tests/test_sync_manager.py` — 18 tests
-- **177 tests total, all passing**
+**Phase 4 — Cleanup UI (fully complete, committed):**
+- `pages/2_Cleanup.py` — Sidebar: top-50 sender selectbox + manual text input, date range, label multiselect, unread-only, min size. Main: top senders reference table, preview card (count + size, starred/important excluded), batch-size warning if >5k. Session-state-driven flow: select → confirm (large_batch_guard + confirm_trash_dialog) → execute (incremental sync → live_label_check → trash_messages → result banner). `last_trash_result` persists result across reruns.
 
-**Not yet committed** — all Phase 3 changes are unstaged. Files added this session:
-`analysis/aggregator.py`, `analysis/__init__.py`, `components/filters.py`, `components/charts.py`, `components/__init__.py`, `cache/sync_manager.py`, `pages/1_Dashboard.py`, `tests/test_aggregator.py`, `tests/test_filters.py`, `tests/test_sync_manager.py`, `app.py` (modified).
+**Git state — all committed and pushed:**
+- `694d77b` — Phase 4 service layer + performance fix (205 tests)
+- `6a06e00` — Phase 4 Cleanup UI
 
 ### What Is In Progress
-Nothing. Phase 3 + background sync are fully implemented and all 177 tests pass. Not yet committed to git.
+Nothing. Phases 1–4 are fully implemented, tested, committed, and pushed. Working tree is clean.
 
 ### Known Issues / Blockers
-- **GCP project not yet set up** — `client_secret.json` still missing. OAuth flow untested against a real account. All logic is covered by unit tests.
-- `app.py` `_add_account` rough edge still present (authenticates as `"__new__"` first, then re-authenticates under real email). Will be cleaned up once GCP is live.
-- `app.py` sync progress banner uses `time.sleep(3)` + `st.rerun()` as a polling loop — works but is not ideal. Can be replaced with `st_autorefresh` component later if desired.
+- **GCP project not yet set up** — `client_secret.json` missing. User has decided to set this up after Phase 5 is complete. All logic is covered by unit tests.
+- `app.py` `_add_account` rough edge: authenticates as `"__new__"` first, then re-authenticates under real email. Will be cleaned up once GCP is live.
+- `app.py` sync progress banner uses `time.sleep(3)` + `st.rerun()` as a polling loop — acceptable for now; can be replaced with `st_autorefresh` later.
 
 ### Exact Next Step to Resume
-1. **Commit Phase 3 work** before starting Phase 4.
-2. **Start Phase 4: Cleanup** — following TDD workflow.
+**Start Phase 5: Unsubscribe & Insights** — the final phase.
 
-Order of work for Phase 4:
-1. Write failing tests for `gmail/actions.py` (`trash_messages`, `unsubscribe_via_post`, `unsubscribe_via_url`) → show → confirm → implement
-2. Write failing tests for `components/safety.py` (`live_label_check`, `confirm_trash_dialog`, `large_batch_guard`) → show → confirm → implement
-3. Wire up `pages/2_Cleanup.py` (no tests — Streamlit UI): sender picker, preview (count + size), confirmation dialog, execute + update SQLite immediately after trash
+Before planning, follow CLAUDE.md model preference: prompt user to switch to Opus.
 
-**Reminder**: Before planning Phase 4 architecture, ask user if they want to switch to Opus per CLAUDE.md model usage preference.
+Order of work for Phase 5:
+1. **`analysis/insights.py`** (TDD) — functions for read behavior and subscription analysis:
+   - `dead_subscriptions(account_email, days)`: senders with unsubscribe URLs where all emails are unread and last email is older than `days`
+   - `read_rate_by_sender(account_email, limit)`: per-sender read rate (read_count / total_count), ordered by most emails
+   - `unread_by_label(account_email)`: unread count + size per label category
+2. **`pages/3_Unsubscribe.py`** (no tests — Streamlit UI): list dead subscriptions, one-click POST unsubscribe or open URL in browser, mark as actioned
+3. **`pages/4_Insights.py`** (no tests — Streamlit UI): read-rate table + chart, unread-by-label breakdown, oldest-unread senders
+
+**Reminder**: Before planning Phase 5 architecture, ask user if they want to switch to Opus per CLAUDE.md model usage preference.
