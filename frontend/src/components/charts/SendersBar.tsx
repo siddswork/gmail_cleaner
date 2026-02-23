@@ -9,7 +9,7 @@ interface Props {
 }
 
 export function SendersBar({ data, mode }: Props) {
-  const chartData = data.slice(0, 20).map((s) => ({
+  const chartData = data.map((s) => ({
     name: s.sender_email.split("@")[0],
     email: s.sender_email,
     value: mode === "count" ? s.count : s.total_size,
@@ -17,8 +17,10 @@ export function SendersBar({ data, mode }: Props) {
 
   const fmt = mode === "count" ? fmtCount : fmtSize;
 
+  const height = Math.max(350, chartData.length * 24);
+
   return (
-    <ResponsiveContainer width="100%" height={350}>
+    <ResponsiveContainer width="100%" height={height}>
       <BarChart data={chartData} layout="vertical" margin={{ left: 8, right: 40 }}>
         <XAxis type="number" tickFormatter={(v) => fmt(v)} tick={{ fontSize: 11 }} />
         <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} width={100} />

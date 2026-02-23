@@ -34,18 +34,19 @@ gmail_cleaner/
 │       └── client_secret.json  # Shared GCP OAuth client (one for all accounts)
 │
 ├── gmail/
-│   ├── client.py               # Rate limiter, retry, batch helper
+│   ├── client.py               # Rate limiter, retry (execute_with_retry), batch helper
 │   ├── fetcher.py              # Message listing, metadata batch fetch (pagination)
 │   └── actions.py              # Trash, unsubscribe operations
 │
 ├── cache/
 │   ├── database.py             # SQLite schema, CRUD, per-account DB path
-│   └── sync.py                 # Full sync + incremental sync (via history.list)
+│   ├── sync.py                 # Full sync + incremental sync (via history.list)
+│   └── sync_manager.py         # Background sync thread, stop_events, progress via sync_state
 │
 ├── analysis/
 │   ├── aggregator.py           # Top senders, category breakdown, timeline
 │   ├── insights.py             # Read behavior, frequency, dead subscriptions, oldest_unread_senders
-│   └── cleanup_queries.py      # cleanup_query_messages() — extracted from old Cleanup page
+│   └── cleanup_queries.py      # cleanup_query_messages(), smart_sweep_query()
 │
 ├── components/
 │   ├── safety.py               # live_label_check(), is_large_batch() — no UI deps
@@ -53,24 +54,24 @@ gmail_cleaner/
 │
 ├── backend/                    # FastAPI app
 │   ├── main.py                 # App factory, CORS, lifespan (auto-loads tokens on startup)
-│   ├── state.py                # In-memory: gmail_services, sync_threads, pending_flows
+│   ├── state.py                # In-memory: gmail_services, sync_threads, cleanup_threads, pending_flows
 │   ├── dependencies.py         # get_account(), get_service() dependency injection
 │   ├── models/schemas.py       # Pydantic request/response models
 │   └── routers/
-│       ├── auth.py             # GET /accounts, POST /connect, GET /callback, DELETE /accounts/{email}
+│       ├── auth.py             # GET /accounts, POST /connect, GET /callback, DELETE /accounts/{email}, POST /logout
 │       ├── sync.py             # GET /status, POST /start, GET /progress (SSE)
 │       ├── dashboard.py        # GET /stats, /top-senders, /categories, /timeline
-│       ├── cleanup.py          # POST /preview, POST /execute
+│       ├── cleanup.py          # POST /preview, POST /execute (background), GET /progress (SSE), POST /stop
 │       ├── unsubscribe.py      # GET /dead, POST /post
 │       └── insights.py         # GET /read-rate, /unread-by-label, /oldest-unread
 │
 ├── frontend/                   # Next.js app
-│   ├── src/app/                # App Router pages (layout, home, dashboard, cleanup, unsubscribe, insights)
-│   ├── src/components/         # UI components (Sidebar, AccountSwitcher, SyncBanner, charts, etc.)
-│   ├── src/hooks/              # useAccounts, useSyncStatus (SSE), useCleanup (state machine)
-│   └── src/lib/                # api.ts, types.ts, format.ts
+│   ├── src/app/                # App Router pages (layout, home/dashboard, cleanup, unsubscribe, insights)
+│   ├── src/components/         # UI components (Sidebar, SyncBanner, CleanupProgressBar, charts, etc.)
+│   ├── src/hooks/              # useSyncStatus (SSE), useCleanup (SSE state machine)
+│   └── src/lib/                # api.ts, types.ts, format.ts, AccountContext.tsx
 │
-├── tests/                      # 283 tests — all service layer + all FastAPI routers
+├── tests/                      # 311 tests — all service layer + all FastAPI routers
 │
 └── data/                       # .gitignored — per-account isolated storage
     └── <email>/
@@ -81,9 +82,43 @@ gmail_cleaner/
 ## Multi-Account Support
 - One GCP project / OAuth client (`client_secret.json`) shared across all accounts
 - Each account gets its own isolated `data/<email>/` directory
-- Account switcher on Home page: add, switch, remove accounts
+- Single active account model — logout clears the session without auto-selecting next account
 - `backend/state.py` `gmail_services` dict tracks active services
 - All service modules accept an `account_email` parameter
+
+## Project Evolution — Key Pivots
+
+This section captures the major decisions and "aha moments" that shaped the project. Future Claude instances should understand *why* things are the way they are.
+
+### 1. Streamlit → FastAPI + Next.js
+**Started with**: Streamlit for both UI and backend (5 pages: `app.py`, `pages/1_Dashboard.py`, etc.)
+**Problem**: Streamlit is great for prototyping but has no real async support, SSE is impossible, and long-running operations (sync, bulk trash) block the entire UI thread.
+**Pivot**: Migrated to FastAPI (Python backend, port 8000) + Next.js (TypeScript frontend, port 3000). The split gave us real background threads, SSE streams, and a proper separation of concerns. All Streamlit files deleted; service layer kept intact (aggregator, insights, actions, etc.).
+
+### 2. Sync: Naive → Background Thread + SSE + Resumable
+**Started with**: A synchronous sync call that blocked the UI for 90–120 minutes.
+**Aha**: Full sync of 190k emails takes ~106 minutes at 150 units/sec. This cannot be synchronous.
+**Pivot**: `cache/sync_manager.py` launches a daemon thread, writes progress to `sync_state` KV table, and exposes an SSE endpoint (`GET /api/sync/progress`). Frontend connects via SSE and shows a live progress bar with ETA. Added `threading.Event` for graceful stop. Sync is resumable via `full_sync_page_token` checkpoint — an interrupted sync continues from where it left off.
+
+### 3. Retry: Bare .execute() → execute_with_retry with Smart Backoff
+**Problem**: 403 `rateLimitExceeded` (per-minute quota) crashed the sync thread with no recovery.
+**Aha**: Google's per-minute quota resets every 60 seconds, so a standard exponential backoff (2s, 4s, 8s...) is wrong — you need to wait at least 60s before the first retry.
+**Pivot**: `gmail/client.py` `execute_with_retry()` now detects 403 `rateLimitExceeded` vs. 403 `forbidden`, waits a minimum of 60s for quota errors, and uses `max_attempts=8`. Applied to both `list_message_ids` (fetcher) and trash operations (actions).
+
+### 4. Cleanup: Synchronous HTTP → Background Thread + SSE (in progress)
+**Problem**: Current `POST /api/cleanup/execute` blocks the HTTP connection for the entire duration. For 1000s of emails this will time out. No retry, no progress visibility, no stop button.
+**Aha**: The same pattern that fixed sync applies here — background daemon thread + SSE progress stream + stop event. One job per account at a time.
+**Pivot**: Rewriting cleanup to use `cache/cleanup_manager.py` (mirrors `sync_manager.py`), making `/execute` return immediately (202), adding SSE progress, and adding a Stop button.
+
+### 5. UX: MultiAccount Switcher → Single-Account Login Model
+**Problem**: AccountSwitcher on every page was confusing and added complexity. Users don't switch accounts mid-session.
+**Pivot**: Single active account stored in `AccountContext`. Home page shows login form when logged out, dashboard when logged in. Logout button inline in sidebar nav. The `__new__` OAuth artifact filtered from accounts list.
+
+### 6. Workflow: Ad-Hoc → TDD + /handoff + /cont... slash commands
+**Aha**: Long coding sessions lose context between conversations. Claude starts fresh and repeats work.
+**Pivot**: Created `/handoff` slash command (writes structured `## Last Session` to `CLAUDE.md`) and `/cont...` (reads it to resume). Established strict TDD: failing tests first, implementation second, never simultaneously. Model switching: Opus for planning/architecture, Sonnet for coding — encoded in `CLAUDE.md` instructions.
+
+---
 
 ## Capacity Analysis (Primary Account)
 
@@ -119,16 +154,16 @@ At 150 units/sec target: **~106 minutes** for a full sync of 190,000 emails.
 - Daily quota limit: 1 billion units/day — full sync uses < 0.1%, not a concern.
 - After first sync, incremental sync via `history.list` takes **seconds**.
 
-### Key implications for Phase 2
+### Key Sync Implications
 - **Full sync must be resumable** — store a page checkpoint in `sync_state` so an interrupted sync picks up where it left off rather than restarting from zero.
 - Show a progress bar during full sync; allow the user to browse partial data while it runs.
-- Update the Key Gotchas sync time estimate: ~90–120 minutes for this account size.
+- Sync time: ~90–120 minutes for this account size.
 
 ## Gmail API Rules
 - **Scopes**: `gmail.modify` only — this makes permanent deletion impossible at the API level
 - **Batch size**: 50 messages per batch request (never exceed 100)
 - **Rate limiting**: target 150 quota units/sec (hard limit is 250)
-- **Retry**: exponential backoff on 429, 500, 503 responses
+- **Retry**: use `execute_with_retry` from `gmail/client.py` — 60s minimum wait on 403 rateLimitExceeded, exponential backoff on 429/500/503
 - **Pagination**: always use `nextPageToken` for `messages.list`; max 500 results per page
 - **Sync strategy**: full sync on first run (stores `historyId`), incremental via `history.list` on subsequent runs
 
@@ -173,23 +208,9 @@ CREATE TABLE action_log (
 );
 
 CREATE TABLE sync_state (key TEXT PRIMARY KEY, value TEXT);
--- Keys: last_history_id, last_full_sync_ts, total_messages_synced
+-- Keys: last_history_id, last_full_sync_ts, total_messages_synced,
+--       full_sync_page_token, messages_total, sync_started_ts
 ```
-
-## Streamlit Session State Keys
-- `gmail_service` — authenticated Gmail API service object
-- `active_account` — currently active account email string
-- `last_sync` — timestamp of last sync
-- `sync_in_progress` — boolean flag
-- `pending_trash` — list of message IDs awaiting confirmation
-- `trash_confirmed` — boolean after user confirms
-
-## Implementation Phases
-1. **Foundation**: `requirements.txt`, `.gitignore`, `config/settings.py`, `auth/oauth.py`, `cache/database.py`, `app.py`
-2. **Fetching & Caching**: `gmail/client.py`, `gmail/fetcher.py`, `cache/sync.py`
-3. **Dashboard**: `analysis/aggregator.py`, `components/charts.py`, `components/filters.py`, `pages/1_Dashboard.py`
-4. **Cleanup**: `gmail/actions.py`, `components/safety.py`, `pages/2_Cleanup.py`
-5. **Unsubscribe & Insights**: `analysis/insights.py`, `pages/3_Unsubscribe.py`, `pages/4_Insights.py`
 
 ## Model Usage Preference
 
@@ -203,7 +224,7 @@ When I ask you to plan, create a plan, analyze an approach, or break down a task
 ### After Planning is Complete
 When you finish producing a plan and I confirm it:
 - Say exactly:
-  "✅ PLAN COMPLETE: Consider switching to Sonnet now for faster, 
+  "✅ PLAN COMPLETE: Consider switching to Sonnet now for faster,
    cost-efficient implementation. Switch models and then tell me to proceed."
 - Do not start implementation until I explicitly say "proceed" or "start".
 
@@ -224,13 +245,17 @@ Red → Green → Refactor. Always.
 
 ## Running the App
 
-**Backend** (terminal 1, from project root):
 ```bash
-uvicorn backend.main:app --reload --port 8000
+./start.sh   # starts backend (port 8000) + frontend (port 3000)
+./stop.sh    # stops both
 ```
 
-**Frontend** (terminal 2):
+Or manually:
 ```bash
+# Terminal 1 (project root)
+uvicorn backend.main:app --reload --port 8000
+
+# Terminal 2
 cd frontend && npm run dev
 ```
 
@@ -239,68 +264,35 @@ Open `http://localhost:3000` in browser.
 ## Key Gotchas
 - `sender_email` must be parsed from the `From` header at insert time (e.g., extract `email@example.com` from `"Name <email@example.com>"`)
 - `is_starred` and `is_important` are denormalized from `label_ids` at insert time for fast safety queries
-- Initial full sync takes ~90–120 minutes for ~190k emails (primary account) — SSE progress stream via `GET /api/sync/progress`; sync must be resumable via a page checkpoint in `sync_state`
+- Initial full sync takes ~90–120 minutes for ~190k emails (primary account) — SSE progress stream via `GET /api/sync/progress`; sync must be resumable via `full_sync_page_token` checkpoint in `sync_state`
 - After trashing messages, delete those rows from SQLite immediately (don't wait for next sync)
 - The `data/` and `auth/credentials/` directories are gitignored — never commit tokens or credentials
 - Backend auto-loads existing tokens on startup (lifespan event in `backend/main.py`)
 - OAuth redirect URI must be `http://localhost:8000/api/auth/callback` in GCP console
+- 403 `rateLimitExceeded` = per-minute quota hit — wait 60s minimum before retry (NOT the same as 429 which is per-second)
+- `date_ts = 0` appears for emails with unparseable dates — always filter with `date_ts > 0` in MIN/MAX/timeline queries
 
 ---
 
 ## Last Session
 **Date**: 2026-02-22
 
-### What We Were Trying to Accomplish
-Two things this session:
-1. Complete the Streamlit → FastAPI + Next.js migration (Phases A–D) — DONE
-2. Implement a UX rework based on user feedback — plan written, **NOT YET COMMITTED OR IMPLEMENTED**
+### What Was Accomplished
+- All previous UX rework implemented and committed (311 tests passing):
+  - Background sync with SSE progress, stop support, ETA calculation
+  - execute_with_retry with 60s minimum wait for 403 rateLimitExceeded
+  - Single-account login model (logout button in sidebar)
+  - Sync progress shows real DB count (not stale sync_state value)
+  - date_ts=0 filtering in aggregator (oldest email, timeline)
+  - SendersBar chart shows all N items (not hardcoded 20)
+- Cleanup rework plan written (plan file: `/home/sidd/.claude/plans/snuggly-imagining-lemur.md`)
 
-### What Was Completed
+### Next Step: Implement Cleanup Rework
+Plan is approved. Switch to Sonnet, then implement in TDD order:
+1. Phase 1: `gmail/actions.py` — retry + progress_callback + stop_event (write `tests/test_gmail_actions.py` first)
+2. Phase 2: `cache/cleanup_manager.py` (new) + `backend/state.py` (write `tests/test_backend/test_cleanup_manager.py` first)
+3. Phase 3: `analysis/cleanup_queries.py` smart_sweep_query + new router endpoints (extend existing test files first)
+4. Phase 4: Frontend types + API client + useCleanup hook (SSE-based)
+5. Phase 5: Cleanup page 3-tab UI + CleanupProgressBar component
 
-**Full Streamlit → FastAPI + Next.js migration (283 tests passing):**
-
-- Phase A: Service layer additions — `oldest_unread_senders()`, `create_auth_flow()`, `exchange_code()`, `cleanup_query_messages()`
-- Phase B: FastAPI backend — `backend/` directory with 6 routers (auth, sync SSE, dashboard, cleanup, unsubscribe, insights)
-- Phase C: Next.js frontend — 5 pages, 10+ components, Recharts charts, SSE-based sync, `AccountContext` for shared state, `useCleanup` state machine
-- Phase D: Deleted `app.py`, `pages/`, trimmed Streamlit deps from `components/`, updated `.gitignore`, `CLAUDE.md`, `README.md`
-- 283 tests all pass; `npm run build` clean
-
-### What Is In Progress — NOT YET COMMITTED
-
-**Git state: everything is STAGED but not committed, and deletions still need to be staged.**
-
-To complete the commit:
-```bash
-git add -u  # stages deleted files (app.py, pages/*)
-git add frontend/.gitignore  # untracked
-git commit -m "Migrate from Streamlit to FastAPI + Next.js (283 tests passing)"
-git push
-```
-
-**UX rework plan written but not implemented** — plan file at:
-`/home/sidd/.claude/plans/refactored-juggling-meteor.md`
-
-UX rework covers 4 phases:
-1. **Backend**: graceful sync stop (`threading.Event`), store `messages_total`/`sync_started_ts`, filter `__new__` from accounts, add `POST /api/auth/logout`
-2. **Frontend AccountContext**: single login/logout model (remove `setActiveAccount`, add `logout()`)
-3. **UI rework**: merge Home+Dashboard into `page.tsx` (login page when logged out, dashboard when in), conditional sidebar nav, new `SyncBanner` with progress bar + ETA, delete `AccountSwitcher.tsx` and `dashboard/page.tsx`
-4. **Dashboard auto-refresh**: `setInterval` every 30s while `is_syncing`
-
-### Known Issues / Blockers
-- **GCP project not yet set up** — `client_secret.json` missing. This blocks live runs.
-- **`__new__` account showing in UI** — artifact from old OAuth flow; fixed in UX rework plan (filter it in `backend/routers/auth.py` `list_accounts()`)
-- **Home page UX problems** — multi-account switcher layout is confusing; fixed in UX rework plan
-- **No sync progress bar** — only "Syncing... N cached" text; fixed in UX rework plan
-
-### Exact Next Step to Resume
-
-**Step 1: Finish the commit** (this was interrupted during this session):
-```bash
-cd /home/sidd/dev/utility/gmail_cleaner
-git add -u
-git add frontend/.gitignore
-git commit -m "Migrate from Streamlit to FastAPI + Next.js (283 tests passing)"
-git push
-```
-
-**Step 2: Implement the UX rework** — read plan at `/home/sidd/.claude/plans/refactored-juggling-meteor.md`, then proceed with TDD starting from Phase 1 (backend changes). Use Opus for planning, Sonnet for coding.
+Read plan file for full details before starting.
