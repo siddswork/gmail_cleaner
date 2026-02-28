@@ -10,7 +10,7 @@ import threading
 import time
 
 from cache.database import get_sync_state, set_sync_state, get_email_count
-from cache.sync import full_sync
+from cache.sync import full_sync, incremental_sync
 
 logger = logging.getLogger(__name__)
 
@@ -89,17 +89,26 @@ def stop_sync(account_email: str, thread: threading.Thread | None = None, timeou
 
 
 def _sync_worker(account_email: str, service, stop_event: threading.Event) -> None:
-    """Thread target: run full_sync and report progress to sync_state."""
+    """Thread target: run incremental or full sync depending on current state.
+
+    - No prior sync / interrupted sync → full_sync (may take 90+ min)
+    - Full sync already completed       → incremental_sync (seconds)
+    """
     set_sync_state(account_email, "sync_started_ts", str(int(time.time())))
     set_sync_state(account_email, "total_messages_synced", "0")
-    logger.info("Sync started for %s", account_email)
 
     def _progress_callback(total: int) -> None:
         set_sync_state(account_email, "total_messages_synced", str(total))
 
     try:
-        full_sync(account_email, service, progress_callback=_progress_callback, stop_event=stop_event)
-        logger.info("Sync completed for %s", account_email)
+        if needs_full_sync(account_email) or has_interrupted_sync(account_email):
+            logger.info("Full sync started for %s", account_email)
+            full_sync(account_email, service, progress_callback=_progress_callback, stop_event=stop_event)
+            logger.info("Full sync completed for %s", account_email)
+        else:
+            logger.info("Incremental sync started for %s", account_email)
+            changes = incremental_sync(account_email, service)
+            logger.info("Incremental sync completed for %s — %d changes", account_email, changes)
     except Exception:
         logger.exception("Sync worker crashed for %s", account_email)
 

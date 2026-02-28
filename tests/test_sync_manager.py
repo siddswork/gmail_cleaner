@@ -218,6 +218,47 @@ class TestStartBackgroundSync:
         assert len(captured) == 1
         assert isinstance(captured[0], threading.Event)
 
+    def test_calls_incremental_when_full_sync_already_complete(self, account):
+        """After a completed full sync, start_background_sync must run incremental — not full."""
+        service = MagicMock()
+        set_sync_state(account, "last_full_sync_ts", "1700000000")
+        set_sync_state(account, "last_history_id", "99999")
+
+        with patch("cache.sync_manager.incremental_sync") as mock_incr, \
+             patch("cache.sync_manager.full_sync") as mock_full:
+            t = start_background_sync(account, service)
+            t.join(timeout=2)
+
+        mock_incr.assert_called_once()
+        mock_full.assert_not_called()
+
+    def test_calls_full_sync_when_no_previous_sync(self, account):
+        """Fresh DB (no sync state): must run full sync."""
+        service = MagicMock()
+        # No sync state set — fresh account
+
+        with patch("cache.sync_manager.incremental_sync") as mock_incr, \
+             patch("cache.sync_manager.full_sync") as mock_full:
+            t = start_background_sync(account, service)
+            t.join(timeout=2)
+
+        mock_full.assert_called_once()
+        mock_incr.assert_not_called()
+
+    def test_calls_full_sync_when_previous_sync_was_interrupted(self, account):
+        """Interrupted sync (page token present, no completion ts): must resume full sync."""
+        service = MagicMock()
+        set_sync_state(account, "full_sync_page_token", "some_page_token")
+        # No last_full_sync_ts (was interrupted before it could be written)
+
+        with patch("cache.sync_manager.incremental_sync") as mock_incr, \
+             patch("cache.sync_manager.full_sync") as mock_full:
+            t = start_background_sync(account, service)
+            t.join(timeout=2)
+
+        mock_full.assert_called_once()
+        mock_incr.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # stop_sync

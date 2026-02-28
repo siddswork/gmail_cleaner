@@ -115,6 +115,8 @@ def incremental_sync(account_email: str, service) -> int:
             "No history ID stored. Run a full sync before incremental sync."
         )
 
+    logger.info("Incremental sync started for %s (historyId %s)", account_email, history_id)
+
     response = service.users().history().list(
         userId="me",
         startHistoryId=history_id,
@@ -132,7 +134,13 @@ def incremental_sync(account_email: str, service) -> int:
         for deleted in record.get("messagesDeleted", []):
             deleted_ids.append(deleted["message"]["id"])
 
+    logger.info(
+        "Incremental sync for %s — %d history records: %d to add, %d to delete",
+        account_email, len(history_records), len(added_ids), len(deleted_ids),
+    )
+
     if added_ids:
+        logger.info("Incremental sync fetching metadata for %d new messages — %s", len(added_ids), account_email)
         new_emails = fetch_metadata_batch(service, added_ids)
         batch_upsert_emails(account_email, new_emails)
 
