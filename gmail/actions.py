@@ -15,7 +15,10 @@ import requests
 from googleapiclient.errors import HttpError
 
 from cache.database import delete_emails, log_action, _connect
-from gmail.client import execute_with_retry
+from gmail.client import execute_with_retry, _rate_limiter
+
+# Gmail API quota units for messages.batchModify (per call, regardless of how many IDs)
+_BATCH_MODIFY_QUOTA_UNITS = 50
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +66,9 @@ def trash_messages(
             # Query sizes before deleting so the log is accurate
             chunk_size = _sum_sizes(account_email, chunk)
 
+            # Throttle to stay within per-minute quota (50 units per batchModify call)
+            _rate_limiter.consume(_BATCH_MODIFY_QUOTA_UNITS)
+
             # API call with retry — raises on non-transient errors
             request = service.users().messages().batchModify(
                 userId="me",
@@ -75,8 +81,9 @@ def trash_messages(
             trashed_ids.extend(chunk)
             total_size += chunk_size
             logger.info(
-                "Trashed chunk of %d messages for %s (total so far: %d)",
+                "Trashed chunk of %d for %s — total: %d trashed, %s reclaimed",
                 len(chunk), account_email, len(trashed_ids),
+                _fmt_size(total_size),
             )
 
             if progress_callback is not None:
@@ -148,6 +155,15 @@ def unsubscribe_via_url(unsubscribe_url: str | None) -> str | None:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _fmt_size(b: int) -> str:
+    """Format bytes as a human-readable string for log messages."""
+    for unit in ("B", "KB", "MB", "GB"):
+        if b < 1024:
+            return f"{b:.1f} {unit}"
+        b /= 1024
+    return f"{b:.1f} TB"
+
 
 def _sum_sizes(account_email: str, message_ids: list[str]) -> int:
     """Return the total size_estimate for the given message IDs from the cache."""

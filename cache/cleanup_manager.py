@@ -130,8 +130,12 @@ def _cleanup_worker(
             pass  # No history ID yet — proceed with cache as-is
 
         # Step 2: live label check — filter out starred/important
+        logger.info("Live label check for %s — verifying %d messages", account_email, len(message_ids))
         check = live_label_check(service, message_ids)
         safe_ids = check["safe"]
+        blocked = len(message_ids) - len(safe_ids)
+        if blocked:
+            logger.info("Live label check blocked %d messages (starred/important) for %s", blocked, account_email)
 
         if not safe_ids:
             cleanup_progress[account_email].update({
