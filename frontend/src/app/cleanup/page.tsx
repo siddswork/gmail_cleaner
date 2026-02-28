@@ -493,10 +493,15 @@ function SmartSweepTab({
 
   return (
     <div className="flex flex-col gap-4">
+      <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+        Counts and sizes below are for the <strong>last 90 days</strong> only — used to identify
+        senders you mostly ignore. Deletion will trash <strong>all</strong> emails from selected
+        senders (not just the last 90 days).
+      </p>
       <div className="flex items-center justify-between">
         <p className="text-xs text-gray-500">
           {senders.length} high-volume, low-read-rate senders found.
-          {selected.size > 0 && ` ${selected.size} selected — ~${fmtCount(selectedStats.count)} emails, ~${fmtSize(selectedStats.size)}`}
+          {selected.size > 0 && ` ${selected.size} selected — ~${fmtCount(selectedStats.count)} emails, ~${fmtSize(selectedStats.size)} (90-day view)`}
         </p>
         <div className="flex gap-2">
           <button
@@ -540,13 +545,13 @@ function SmartSweepTab({
                 onClick={() => handleSort("count")}
                 className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wide cursor-pointer select-none"
               >
-                Emails{sortArrow(sortBy === "count", sortDir)}
+                Emails (90d){sortArrow(sortBy === "count", sortDir)}
               </th>
               <th
                 onClick={() => handleSort("size")}
                 className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wide cursor-pointer select-none"
               >
-                Size{sortArrow(sortBy === "size", sortDir)}
+                Size (90d){sortArrow(sortBy === "size", sortDir)}
               </th>
               <th
                 onClick={() => handleSort("read_rate")}
