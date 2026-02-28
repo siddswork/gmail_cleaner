@@ -16,22 +16,37 @@ from config.settings import LARGE_BATCH_THRESHOLD
 # Fixtures
 # ---------------------------------------------------------------------------
 
-def _mock_service_with_labels(label_map: dict[str, list[str]]):
+def _mock_service_with_labels(label_map: dict[str, list[str]], error_ids: set | None = None):
     """
-    Build a Gmail service mock where messages().get().execute() returns
-    the label_ids specified in label_map keyed by message ID.
+    Build a Gmail service mock that simulates batch execution.
+
+    When batch.execute() is called the callback is invoked for each added
+    request_id — using label_map to build the response, or an HttpError for
+    any ID listed in error_ids.
     """
+    from googleapiclient.errors import HttpError as _HttpError
+
+    error_ids = error_ids or set()
     service = MagicMock()
 
-    def get_side_effect(userId, id, format, fields):  # noqa: A002
-        response = MagicMock()
-        response.execute.return_value = {
-            "id": id,
-            "labelIds": label_map.get(id, []),
-        }
-        return response
+    def new_batch_http_request(callback):
+        batch = MagicMock()
+        added = []
+        batch.add.side_effect = lambda req, request_id=None: added.append(request_id)
 
-    service.users().messages().get.side_effect = get_side_effect
+        def batch_execute():
+            for mid in added:
+                if mid in error_ids:
+                    fake_resp = MagicMock()
+                    fake_resp.status = 404
+                    callback(mid, None, _HttpError(resp=fake_resp, content=b"Not found"))
+                else:
+                    callback(mid, {"id": mid, "labelIds": label_map.get(mid, [])}, None)
+
+        batch.execute.side_effect = batch_execute
+        return batch
+
+    service.new_batch_http_request.side_effect = new_batch_http_request
     return service
 
 
@@ -126,24 +141,11 @@ class TestLiveLabelCheck:
     def test_api_error_on_individual_message_goes_to_errors(self):
         """When a single message's API call fails, it goes to 'errors' — not safe or blocked."""
         from components.safety import live_label_check
-        from googleapiclient.errors import HttpError
 
-        service = MagicMock()
-        fake_resp = MagicMock()
-        fake_resp.status = 404
-
-        def get_side_effect(userId, id, format, fields):  # noqa: A002
-            if id == "bad_msg":
-                response = MagicMock()
-                response.execute.side_effect = HttpError(
-                    resp=fake_resp, content=b"Not found"
-                )
-                return response
-            response = MagicMock()
-            response.execute.return_value = {"id": id, "labelIds": ["INBOX"]}
-            return response
-
-        service.users().messages().get.side_effect = get_side_effect
+        service = _mock_service_with_labels(
+            label_map={"good_msg": ["INBOX"]},
+            error_ids={"bad_msg"},
+        )
 
         result = live_label_check(service, ["good_msg", "bad_msg"])
 
@@ -165,6 +167,41 @@ class TestLiveLabelCheck:
             format="minimal",
             fields="id,labelIds",
         )
+
+    def test_uses_batch_api_for_multiple_messages(self):
+        """live_label_check must use the batch API — not individual .execute() calls.
+
+        This test sets up ONLY the batch path (new_batch_http_request). If the
+        implementation is sequential it will misclassify STARRED messages as safe
+        (because individual .execute() returns a MagicMock, not real label data).
+        """
+        from components.safety import live_label_check
+
+        ids = [f"msg{i}" for i in range(60)]
+        # First two messages are blocked — batch path must surface this correctly
+        label_map = {ids[0]: ["STARRED"], ids[1]: ["IMPORTANT"]}
+
+        service = MagicMock()
+
+        def new_batch_http_request(callback):
+            batch = MagicMock()
+            added = []
+            batch.add.side_effect = lambda req, request_id=None: added.append(request_id)
+            batch.execute.side_effect = lambda: [
+                callback(mid, {"id": mid, "labelIds": label_map.get(mid, [])}, None)
+                for mid in added
+            ]
+            return batch
+
+        service.new_batch_http_request.side_effect = new_batch_http_request
+
+        result = live_label_check(service, ids)
+
+        assert len(result["blocked"]) == 2
+        assert len(result["safe"]) == 58
+        assert result["errors"] == []
+        # ceil(60 / 50) = 2 batches
+        assert service.new_batch_http_request.call_count == 2
 
 
 # ---------------------------------------------------------------------------
