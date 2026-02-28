@@ -103,7 +103,8 @@ def logout_account(email: str):
     Log out the account: stop any running sync and remove from in-memory state.
 
     Does NOT delete data/<email>/ — tokens persist for re-login.
-    Returns 404 if the account is not currently connected.
+    Idempotent — succeeds even if the account is not currently connected,
+    so the frontend can always recover to the login screen.
     """
     thread = state.sync_threads.get(email)
     stop_sync(email, thread=thread)

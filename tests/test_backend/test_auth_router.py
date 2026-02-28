@@ -69,6 +69,7 @@ class TestLogout:
 
         mock_stop.assert_called_once_with(email, thread=None)
 
-    def test_logout_not_connected_returns_404(self, client, tmp_data_dir):
+    def test_logout_not_connected_is_idempotent(self, client, tmp_data_dir):
+        """Logout succeeds even if the account isn't connected (no-op)."""
         resp = client.post("/api/auth/accounts/nobody@x.com/logout")
-        assert resp.status_code == 404
+        assert resp.status_code == 200
