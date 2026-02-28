@@ -4,12 +4,21 @@ FastAPI application entry point.
 Run with:
     uvicorn backend.main:app --reload --port 8000
 """
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.routers import auth, cleanup, dashboard, insights, sync, unsubscribe
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
+    datefmt="%H:%M:%S",
+)
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -28,9 +37,9 @@ async def lifespan(app: FastAPI):
                     svc = get_authenticated_service(email)
                     state.gmail_services[email] = svc
                     init_db(email)
-                    print(f"[startup] Loaded account: {email}")
+                    logger.info("Loaded account: %s", email)
                 except Exception as e:
-                    print(f"[startup] Failed to load {email}: {e}")
+                    logger.error("Failed to load %s: %s", email, e)
 
     yield
     # Shutdown: nothing to clean up (threads are daemons)

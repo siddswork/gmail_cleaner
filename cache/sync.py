@@ -11,6 +11,7 @@ Incremental sync:
   - Upserts newly added messages, deletes removed messages
   - Updates the stored historyId
 """
+import logging
 import time
 
 from cache.database import (
@@ -20,6 +21,8 @@ from cache.database import (
     set_sync_state,
 )
 from gmail.fetcher import fetch_metadata_batch, list_message_ids
+
+logger = logging.getLogger(__name__)
 
 
 def full_sync(account_email: str, service, progress_callback=None, stop_event=None) -> int:
@@ -46,11 +49,14 @@ def full_sync(account_email: str, service, progress_callback=None, stop_event=No
     history_id = profile["historyId"]
 
     # Store total messages count for progress bar ETA calculation
-    if "messagesTotal" in profile:
-        set_sync_state(account_email, "messages_total", str(profile["messagesTotal"]))
+    messages_total = profile.get("messagesTotal")
+    if messages_total:
+        set_sync_state(account_email, "messages_total", str(messages_total))
 
     # Resume from a previous interrupted sync if a checkpoint exists
     page_token = get_sync_state(account_email, "full_sync_page_token")
+
+    logger.info("Full sync started for %s — %s messages total", account_email, messages_total or "unknown")
 
     total = 0
 
@@ -60,6 +66,7 @@ def full_sync(account_email: str, service, progress_callback=None, stop_event=No
             # Save checkpoint so we can resume later
             if page_token:
                 set_sync_state(account_email, "full_sync_page_token", page_token)
+            logger.info("Full sync stopped early for %s — synced %d so far", account_email, total)
             return total
 
         result = list_message_ids(service, page_token=page_token)
@@ -70,6 +77,7 @@ def full_sync(account_email: str, service, progress_callback=None, stop_event=No
             emails = fetch_metadata_batch(service, ids)
             batch_upsert_emails(account_email, emails)
             total += len(emails)
+            logger.debug("Full sync %s — fetched page, total so far: %d", account_email, total)
 
         if progress_callback:
             progress_callback(total)
@@ -87,6 +95,7 @@ def full_sync(account_email: str, service, progress_callback=None, stop_event=No
     set_sync_state(account_email, "last_full_sync_ts", str(int(time.time())))
     set_sync_state(account_email, "full_sync_page_token", None)  # clear checkpoint
 
+    logger.info("Full sync complete for %s — %d messages synced", account_email, total)
     return total
 
 
@@ -136,4 +145,9 @@ def incremental_sync(account_email: str, service) -> int:
         str(response.get("historyId", history_id)),
     )
 
-    return len(added_ids) + len(deleted_ids)
+    changes = len(added_ids) + len(deleted_ids)
+    logger.info(
+        "Incremental sync complete for %s — %d added, %d deleted",
+        account_email, len(added_ids), len(deleted_ids),
+    )
+    return changes

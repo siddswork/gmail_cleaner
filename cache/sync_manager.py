@@ -5,11 +5,14 @@ Provides helpers to detect sync state and launch a full sync in a
 background daemon thread. Progress is written to sync_state so the
 frontend can poll it without touching thread internals.
 """
+import logging
 import threading
 import time
 
 from cache.database import get_sync_state, set_sync_state, get_email_count
 from cache.sync import full_sync
+
+logger = logging.getLogger(__name__)
 
 # Per-account stop events — set to signal a running sync to stop gracefully.
 stop_events: dict[str, threading.Event] = {}
@@ -83,11 +86,16 @@ def stop_sync(account_email: str, thread: threading.Thread | None = None, timeou
 def _sync_worker(account_email: str, service, stop_event: threading.Event) -> None:
     """Thread target: run full_sync and report progress to sync_state."""
     set_sync_state(account_email, "sync_started_ts", str(int(time.time())))
+    logger.info("Sync started for %s", account_email)
 
     def _progress_callback(total: int) -> None:
         set_sync_state(account_email, "total_messages_synced", str(total))
 
-    full_sync(account_email, service, progress_callback=_progress_callback, stop_event=stop_event)
+    try:
+        full_sync(account_email, service, progress_callback=_progress_callback, stop_event=stop_event)
+        logger.info("Sync completed for %s", account_email)
+    except Exception:
+        logger.exception("Sync worker crashed for %s", account_email)
 
 
 def start_background_sync(account_email: str, service) -> threading.Thread:

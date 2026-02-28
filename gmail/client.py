@@ -7,9 +7,12 @@ Provides:
   - batch_execute      : splits a request list into chunks of 50, executes each batch
 """
 import json
+import logging
 import time
 
 from googleapiclient.errors import HttpError
+
+logger = logging.getLogger(__name__)
 
 RETRYABLE_STATUS_CODES = {429, 500, 503}
 RATE_LIMIT_403_REASONS = {"rateLimitExceeded", "userRateLimitExceeded"}
@@ -73,9 +76,17 @@ def execute_with_retry(request, max_attempts: int = 8, base_delay: float = 2.0):
             status = exc.resp.status
             if status in RETRYABLE_STATUS_CODES:
                 delay = base_delay * (2 ** attempt)
+                logger.warning(
+                    "Transient error (%s) — retrying in %ds (attempt %d/%d)",
+                    status, int(delay), attempt + 1, max_attempts,
+                )
             elif status == 403 and _is_rate_limit_403(exc):
                 # Gmail per-minute quota — must wait for the window to reset
                 delay = max(60.0, base_delay * (2 ** attempt))
+                logger.warning(
+                    "Rate limit hit — waiting %ds (attempt %d/%d)",
+                    int(delay), attempt + 1, max_attempts,
+                )
             else:
                 raise
             last_exc = exc
