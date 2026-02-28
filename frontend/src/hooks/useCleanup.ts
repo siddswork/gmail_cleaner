@@ -39,6 +39,27 @@ export function useCleanup(account: string | null) {
     };
   };
 
+  // On mount (or account change): reconnect to any job already running in the background.
+  // Handles the case where the user navigated away while a cleanup was in progress.
+  useEffect(() => {
+    if (!account) return;
+    api.cleanup.jobStatus(account).then((status) => {
+      if (status.status === "running") {
+        setJob(status);
+        setState("running");
+        _openProgressSSE();
+      } else if (status.status === "done" || status.status === "stopped") {
+        setJob(status);
+        setState("done");
+      } else if (status.status === "error") {
+        setJob(status);
+        setState("error");
+      }
+      // "idle" → leave as default idle state
+    }).catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account]);
+
   // Preview for Bulk Senders / Advanced tabs (filter-based)
   const doPreview = async (req: CleanupPreviewRequest) => {
     if (!account) return;
