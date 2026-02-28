@@ -209,3 +209,20 @@ class TestBatchExecute:
         callback = MagicMock()
         batch_execute(service, [MagicMock(), MagicMock()], callback)
         service.new_batch_http_request.assert_called_once_with(callback=callback)
+
+    def test_rate_limiter_consume_called_per_chunk(self):
+        """consume() is called once per chunk with len(chunk) * units_per_request units."""
+        service, batch = self._make_service()
+        mock_limiter = MagicMock()
+        requests = [MagicMock() for _ in range(60)]  # 2 chunks: 50 + 10
+        batch_execute(service, requests, MagicMock(), rate_limiter=mock_limiter)
+        assert mock_limiter.consume.call_count == 2
+        mock_limiter.consume.assert_any_call(250)  # 50 * 5
+        mock_limiter.consume.assert_any_call(50)   # 10 * 5
+
+    def test_rate_limiter_not_called_when_none(self):
+        """No throttling when rate_limiter is omitted (default None)."""
+        service, batch = self._make_service()
+        requests = [MagicMock() for _ in range(50)]
+        batch_execute(service, requests, MagicMock())  # rate_limiter=None by default
+        batch.execute.assert_called_once()

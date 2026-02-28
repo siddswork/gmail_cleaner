@@ -11,7 +11,7 @@ import re
 import time
 from email.utils import parseaddr, parsedate_to_datetime
 
-from gmail.client import batch_execute, execute_with_retry
+from gmail.client import batch_execute, execute_with_retry, _rate_limiter
 
 # Headers we request from the API (everything else is ignored)
 METADATA_HEADERS = [
@@ -90,7 +90,7 @@ def fetch_metadata_batch(service, message_ids: list[str]) -> list[dict]:
         for mid in message_ids
     ]
 
-    batch_execute(service, requests, callback)
+    batch_execute(service, requests, callback, rate_limiter=_rate_limiter)
     return results
 
 

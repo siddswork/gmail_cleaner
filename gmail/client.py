@@ -59,6 +59,10 @@ class RateLimiter:
         self._units_in_window += units
 
 
+# Module-level rate limiter — shared across all throttled API calls.
+_rate_limiter = RateLimiter(target_qps=150)
+
+
 def execute_with_retry(request, max_attempts: int = 8, base_delay: float = 2.0):
     """
     Execute a Gmail API request, retrying on transient errors with
@@ -94,16 +98,30 @@ def execute_with_retry(request, max_attempts: int = 8, base_delay: float = 2.0):
     raise last_exc
 
 
-def batch_execute(service, requests_list: list, callback, batch_size: int = 50) -> None:
+def batch_execute(
+    service,
+    requests_list: list,
+    callback,
+    batch_size: int = 50,
+    rate_limiter: RateLimiter | None = None,
+    units_per_request: int = 5,
+) -> None:
     """
     Execute a list of API request objects in batches of `batch_size` (max 50).
     `callback(request_id, response, exception)` is called for each response.
+
+    If `rate_limiter` is provided, `units_per_request * len(chunk)` units are
+    consumed before each batch chunk to spread quota usage over time and avoid
+    per-minute quota exhaustion. Pass `_rate_limiter` for normal production use;
+    omit (or pass None) in tests to skip throttling.
     """
     if not requests_list:
         return
 
     for i in range(0, len(requests_list), batch_size):
         chunk = requests_list[i : i + batch_size]
+        if rate_limiter is not None:
+            rate_limiter.consume(len(chunk) * units_per_request)
         batch = service.new_batch_http_request(callback=callback)
         for req in chunk:
             batch.add(req)

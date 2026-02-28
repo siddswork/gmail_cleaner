@@ -274,3 +274,12 @@ class TestFetchMetadataBatch:
         results = self._run_with_messages(service, [None, good_msg])
         assert len(results) == 1
         assert results[0]["message_id"] == "msg_good"
+
+    def test_passes_rate_limiter_to_batch_execute(self):
+        """fetch_metadata_batch must pass _rate_limiter so batches are throttled."""
+        from gmail.client import _rate_limiter
+        service = MagicMock()
+        with patch("gmail.fetcher.batch_execute") as mock_batch:
+            fetch_metadata_batch(service, ["id1", "id2"])
+        _, kwargs = mock_batch.call_args
+        assert kwargs.get("rate_limiter") is _rate_limiter
