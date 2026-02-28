@@ -36,6 +36,7 @@ def sync_status(account: str = Depends(get_account)):
         is_syncing=is_syncing,
         messages_total=progress["messages_total"],
         sync_started_ts=progress["sync_started_ts"],
+        synced_this_run=progress["synced_this_run"],
     )
 
 
@@ -75,6 +76,7 @@ async def sync_progress_sse(account: str = Query(...)):
                 "is_syncing": is_syncing,
                 "messages_total": progress["messages_total"],
                 "sync_started_ts": progress["sync_started_ts"],
+                "synced_this_run": progress["synced_this_run"],
             }
             yield f"data: {json.dumps(data)}\n\n"
 

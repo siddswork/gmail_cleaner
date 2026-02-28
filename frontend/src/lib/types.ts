@@ -14,6 +14,7 @@ export interface SyncStatus {
   is_syncing: boolean;
   messages_total: number | null;
   sync_started_ts: number | null;
+  synced_this_run: number;
 }
 
 export interface OverallStats {

@@ -51,6 +51,7 @@ def get_sync_progress(account_email: str) -> dict:
     raw_token = get_sync_state(account_email, "full_sync_page_token")
     raw_messages_total = get_sync_state(account_email, "messages_total")
     raw_started_ts = get_sync_state(account_email, "sync_started_ts")
+    raw_synced_this_run = get_sync_state(account_email, "total_messages_synced")
 
     # Always read actual row count from the DB — this is accurate regardless
     # of whether a previous sync run wrote to sync_state or was interrupted.
@@ -66,6 +67,10 @@ def get_sync_progress(account_email: str) -> dict:
         "last_full_sync_ts": int(raw_ts) if raw_ts else None,
         "messages_total": int(raw_messages_total) if raw_messages_total else None,
         "sync_started_ts": int(raw_started_ts) if raw_started_ts else None,
+        # Count fetched only in this run (reset to 0 on each sync start).
+        # Use this for ETA rate calculation — total_synced is cumulative across
+        # all runs and gives a wildly wrong rate when resuming from a checkpoint.
+        "synced_this_run": int(raw_synced_this_run) if raw_synced_this_run else 0,
     }
 
 
@@ -86,6 +91,7 @@ def stop_sync(account_email: str, thread: threading.Thread | None = None, timeou
 def _sync_worker(account_email: str, service, stop_event: threading.Event) -> None:
     """Thread target: run full_sync and report progress to sync_state."""
     set_sync_state(account_email, "sync_started_ts", str(int(time.time())))
+    set_sync_state(account_email, "total_messages_synced", "0")
     logger.info("Sync started for %s", account_email)
 
     def _progress_callback(total: int) -> None:

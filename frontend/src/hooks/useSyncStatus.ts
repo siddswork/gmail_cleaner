@@ -23,6 +23,7 @@ export function useSyncStatus(account: string | null) {
               is_syncing: data.is_syncing,
               messages_total: data.messages_total ?? prev.messages_total,
               sync_started_ts: data.sync_started_ts ?? prev.sync_started_ts,
+              synced_this_run: data.synced_this_run ?? prev.synced_this_run,
             }
           : null,
       );

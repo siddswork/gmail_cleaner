@@ -35,6 +35,7 @@ class SyncStatusResponse(BaseModel):
     is_syncing: bool
     messages_total: int | None
     sync_started_ts: int | None
+    synced_this_run: int
 
 
 class SyncStartResponse(BaseModel):

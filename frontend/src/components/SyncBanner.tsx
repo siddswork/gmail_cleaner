@@ -24,9 +24,9 @@ export function SyncBanner({ status, onStartSync }: Props) {
     const pct = hasTotal ? Math.min(100, Math.round((status.total_synced / status.messages_total!) * 100)) : null;
 
     let eta: string | null = null;
-    if (hasTotal && status.sync_started_ts != null && status.total_synced > 0) {
+    if (hasTotal && status.sync_started_ts != null && status.synced_this_run > 0) {
       const elapsed = Date.now() / 1000 - status.sync_started_ts;
-      const rate = status.total_synced / elapsed;
+      const rate = status.synced_this_run / elapsed;  // emails/sec fetched in this run only
       const remaining = (status.messages_total! - status.total_synced) / rate;
       if (remaining > 0 && isFinite(remaining)) {
         eta = fmtEta(remaining);
