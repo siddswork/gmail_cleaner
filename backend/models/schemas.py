@@ -82,7 +82,7 @@ class TimelineBucket(BaseModel):
 # ---------------------------------------------------------------------------
 
 class CleanupPreviewRequest(BaseModel):
-    sender_email: str
+    sender_email: str | None = None
     start_ts: int | None = None
     end_ts: int | None = None
     labels: list[str] | None = None
@@ -106,6 +106,32 @@ class CleanupExecuteResponse(BaseModel):
     size_reclaimed: int
     blocked: int
     errors: int
+
+
+class CleanupJobStatus(BaseModel):
+    status: str  # "idle" | "running" | "done" | "stopped" | "error"
+    total: int
+    processed: int
+    trashed: int
+    size_reclaimed: int
+    errors: int
+
+
+class SmartSweepSender(BaseModel):
+    sender_email: str
+    count: int
+    total_size: int
+    read_rate: float
+
+
+class SmartSweepPreviewRequest(BaseModel):
+    sender_emails: list[str]
+
+
+class SmartSweepPreviewResponse(BaseModel):
+    count: int
+    total_size: int
+    message_ids: list[str]
 
 
 # ---------------------------------------------------------------------------

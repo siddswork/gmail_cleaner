@@ -4,6 +4,7 @@ Tests for gmail/actions.py
 Run with: pytest tests/test_actions.py -v
 """
 import json
+import threading
 import pytest
 from unittest.mock import MagicMock, patch, call
 
@@ -158,9 +159,10 @@ class TestTrashMessages:
 
         service = MagicMock()
         fake_resp = MagicMock()
-        fake_resp.status = 500
+        # Use 404 (not in RETRYABLE_STATUS_CODES) so execute_with_retry raises immediately
+        fake_resp.status = 404
         service.users().messages().batchModify().execute.side_effect = HttpError(
-            resp=fake_resp, content=b"Server error"
+            resp=fake_resp, content=b"Not found"
         )
 
         with pytest.raises(HttpError):
@@ -184,6 +186,227 @@ class TestTrashMessages:
 
         assert result["trashed"] == 2
         assert result["size_reclaimed"] == 1000
+
+
+# ---------------------------------------------------------------------------
+# trash_messages — retry, progress_callback, stop_event
+# ---------------------------------------------------------------------------
+
+class TestTrashMessagesRetryAndProgress:
+    """Tests for execute_with_retry integration, progress_callback, and stop_event."""
+
+    def test_uses_execute_with_retry_per_chunk(self, account):
+        """execute_with_retry is called for each batchModify request instead of bare .execute()."""
+        from gmail.actions import trash_messages
+
+        upsert_email(account, _make_email("msg1"))
+
+        with patch("gmail.actions.execute_with_retry") as mock_retry:
+            mock_retry.return_value = None
+            trash_messages(account, MagicMock(), ["msg1"])
+
+        assert mock_retry.call_count == 1
+
+    def test_execute_with_retry_called_once_per_chunk(self, account):
+        """With 1500 IDs (2 chunks), execute_with_retry is called twice."""
+        from gmail.actions import trash_messages
+
+        ids = [f"msg{i}" for i in range(1500)]
+        batch_upsert_emails(account, [_make_email(mid) for mid in ids])
+
+        with patch("gmail.actions.execute_with_retry", return_value=None) as mock_retry:
+            trash_messages(account, MagicMock(), ids)
+
+        assert mock_retry.call_count == 2
+
+    def test_progress_callback_called_after_each_chunk(self, account):
+        """progress_callback(processed, trashed, size_reclaimed) is invoked once per chunk with cumulative totals."""
+        from gmail.actions import trash_messages
+
+        ids = [f"msg{i}" for i in range(1500)]
+        batch_upsert_emails(account, [_make_email(mid, size_estimate=100) for mid in ids])
+
+        calls = []
+
+        with patch("gmail.actions.execute_with_retry", return_value=None):
+            trash_messages(
+                account,
+                MagicMock(),
+                ids,
+                progress_callback=lambda processed, trashed, size_reclaimed: calls.append(
+                    (processed, trashed, size_reclaimed)
+                ),
+            )
+
+        assert len(calls) == 2
+        assert calls[0] == (1000, 1000, 100_000)  # 1000 × 100
+        assert calls[1] == (1500, 1500, 150_000)  # 1500 × 100
+
+    def test_no_progress_callback_does_not_raise(self, account):
+        """Omitting progress_callback (default None) works without error."""
+        from gmail.actions import trash_messages
+
+        upsert_email(account, _make_email("msg1"))
+
+        with patch("gmail.actions.execute_with_retry", return_value=None):
+            result = trash_messages(account, MagicMock(), ["msg1"])
+
+        assert result["trashed"] == 1
+
+    def test_stop_event_checked_before_each_chunk(self, account):
+        """When stop_event is set after the first chunk, subsequent chunks are skipped."""
+        from gmail.actions import trash_messages
+
+        ids = [f"msg{i}" for i in range(1500)]
+        batch_upsert_emails(account, [_make_email(mid) for mid in ids])
+
+        stop_event = threading.Event()
+        chunks_processed = [0]
+
+        def fake_retry(request):
+            chunks_processed[0] += 1
+            stop_event.set()  # stop after first chunk completes
+            return None
+
+        with patch("gmail.actions.execute_with_retry", side_effect=fake_retry):
+            result = trash_messages(account, MagicMock(), ids, stop_event=stop_event)
+
+        assert chunks_processed[0] == 1
+        assert result["trashed"] == 1000
+        assert result["stopped_early"] is True
+
+    def test_stop_event_partial_cache_delete(self, account):
+        """After a stop, only rows from completed chunks are deleted from SQLite."""
+        from gmail.actions import trash_messages
+
+        ids = [f"msg{i}" for i in range(1500)]
+        batch_upsert_emails(account, [_make_email(mid) for mid in ids])
+
+        stop_event = threading.Event()
+
+        def fake_retry(request):
+            stop_event.set()
+            return None
+
+        with patch("gmail.actions.execute_with_retry", side_effect=fake_retry):
+            trash_messages(account, MagicMock(), ids, stop_event=stop_event)
+
+        conn = _connect(account)
+        remaining = conn.execute("SELECT COUNT(*) FROM emails").fetchone()[0]
+        conn.close()
+        # First 1000 trashed, last 500 untouched
+        assert remaining == 500
+
+    def test_action_log_written_on_stop_with_actual_count(self, account):
+        """Action log is written even when stopped early, recording the actual count trashed."""
+        from gmail.actions import trash_messages
+
+        ids = [f"msg{i}" for i in range(1500)]
+        batch_upsert_emails(account, [_make_email(mid, size_estimate=100) for mid in ids])
+
+        stop_event = threading.Event()
+
+        def fake_retry(request):
+            stop_event.set()
+            return None
+
+        with patch("gmail.actions.execute_with_retry", side_effect=fake_retry):
+            trash_messages(account, MagicMock(), ids, stop_event=stop_event)
+
+        rows = _action_log_rows(account)
+        assert len(rows) == 1
+        assert rows[0]["count"] == 1000
+        assert rows[0]["size_reclaimed"] == 100_000  # 1000 × 100 bytes
+
+    def test_stop_event_not_set_processes_all_chunks(self, account):
+        """When stop_event is provided but never set, all chunks are processed normally."""
+        from gmail.actions import trash_messages
+
+        ids = [f"msg{i}" for i in range(1500)]
+        batch_upsert_emails(account, [_make_email(mid) for mid in ids])
+
+        stop_event = threading.Event()  # never set
+
+        with patch("gmail.actions.execute_with_retry", return_value=None):
+            result = trash_messages(account, MagicMock(), ids, stop_event=stop_event)
+
+        assert result["trashed"] == 1500
+        assert result["stopped_early"] is False
+
+    def test_stopped_early_false_on_normal_completion(self, account):
+        """stopped_early is False in the return dict when no stop_event is given."""
+        from gmail.actions import trash_messages
+
+        upsert_email(account, _make_email("msg1"))
+
+        with patch("gmail.actions.execute_with_retry", return_value=None):
+            result = trash_messages(account, MagicMock(), ["msg1"])
+
+        assert result["stopped_early"] is False
+
+    def test_mid_loop_exception_writes_partial_action_log(self, account):
+        """If execute_with_retry raises on chunk 2, chunk 1's action_log is still written."""
+        from gmail.actions import trash_messages
+        from googleapiclient.errors import HttpError
+
+        ids = [f"msg{i}" for i in range(1500)]
+        batch_upsert_emails(account, [_make_email(mid, size_estimate=100) for mid in ids])
+
+        chunk_number = [0]
+
+        def fail_on_second_chunk(request):
+            chunk_number[0] += 1
+            if chunk_number[0] == 2:
+                fake_resp = MagicMock()
+                fake_resp.status = 403
+                fake_resp.reason = "Forbidden"
+                raise HttpError(resp=fake_resp, content=b"Forbidden")
+            return None
+
+        with patch("gmail.actions.execute_with_retry", side_effect=fail_on_second_chunk):
+            with pytest.raises(HttpError):
+                trash_messages(account, MagicMock(), ids)
+
+        # Chunk 1 (1000 messages) should be logged even though chunk 2 failed
+        rows = _action_log_rows(account)
+        assert len(rows) == 1
+        assert rows[0]["count"] == 1000
+        assert rows[0]["size_reclaimed"] == 100_000  # 1000 × 100
+
+    def test_cache_rows_deleted_per_chunk_not_all_at_end(self, account):
+        """Rows are removed from SQLite after each chunk succeeds, not only at the very end."""
+        from gmail.actions import trash_messages
+
+        ids = [f"msg{i}" for i in range(1500)]
+        batch_upsert_emails(account, [_make_email(mid) for mid in ids])
+
+        deleted_after_first_chunk = [None]
+        chunk_number = [0]
+
+        def fake_retry(request):
+            chunk_number[0] += 1
+            return None
+
+        original_delete = None
+
+        import cache.database as db_module
+
+        real_delete = db_module.delete_emails
+
+        def tracking_delete(account_email, ids_to_delete):
+            real_delete(account_email, ids_to_delete)
+            if chunk_number[0] == 1:
+                conn = _connect(account_email)
+                count = conn.execute("SELECT COUNT(*) FROM emails").fetchone()[0]
+                conn.close()
+                deleted_after_first_chunk[0] = count
+
+        with patch("gmail.actions.execute_with_retry", side_effect=fake_retry):
+            with patch("gmail.actions.delete_emails", side_effect=tracking_delete):
+                trash_messages(account, MagicMock(), ids)
+
+        # After first chunk (1000 deleted), 500 should remain
+        assert deleted_after_first_chunk[0] == 500
 
 
 # ---------------------------------------------------------------------------

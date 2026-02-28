@@ -48,7 +48,7 @@ export interface TimelineBucket {
 }
 
 export interface CleanupPreviewRequest {
-  sender_email: string;
+  sender_email?: string | null;
   start_ts?: number | null;
   end_ts?: number | null;
   labels?: string[];
@@ -67,6 +67,22 @@ export interface CleanupResult {
   size_reclaimed: number;
   blocked: number;
   errors: number;
+}
+
+export interface CleanupJob {
+  status: "idle" | "running" | "done" | "stopped" | "error";
+  total: number;
+  processed: number;
+  trashed: number;
+  size_reclaimed: number;
+  errors: number;
+}
+
+export interface SmartSweepSender {
+  sender_email: string;
+  count: number;
+  total_size: number;
+  read_rate: number;
 }
 
 export interface DeadSubscription {

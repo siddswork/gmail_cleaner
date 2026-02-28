@@ -58,9 +58,22 @@ export const api = {
         body: JSON.stringify(body),
       }),
     execute: (account: string, message_ids: string[], confirm_word?: string) =>
-      request<import("./types").CleanupResult>(`/api/cleanup/execute?account=${encodeURIComponent(account)}`, {
+      request<import("./types").CleanupJob>(`/api/cleanup/execute?account=${encodeURIComponent(account)}`, {
         method: "POST",
         body: JSON.stringify({ message_ids, confirm_word }),
+      }),
+    jobStatus: (account: string) =>
+      request<import("./types").CleanupJob>(`/api/cleanup/job-status?account=${encodeURIComponent(account)}`),
+    stop: (account: string) =>
+      request<{ message: string }>(`/api/cleanup/stop?account=${encodeURIComponent(account)}`, { method: "POST" }),
+    progressUrl: (account: string) =>
+      `${API}/api/cleanup/progress?account=${encodeURIComponent(account)}`,
+    smartSweep: (account: string) =>
+      request<import("./types").SmartSweepSender[]>(`/api/cleanup/smart-sweep?account=${encodeURIComponent(account)}`),
+    smartSweepPreview: (account: string, sender_emails: string[]) =>
+      request<import("./types").CleanupPreview>(`/api/cleanup/smart-sweep/preview?account=${encodeURIComponent(account)}`, {
+        method: "POST",
+        body: JSON.stringify({ sender_emails }),
       }),
   },
 

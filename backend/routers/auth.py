@@ -35,14 +35,16 @@ def list_accounts():
         for d in sorted(root.iterdir()):
             if d.is_dir() and (d / "token.json").exists() and d.name != "__new__":
                 email = d.name
-                accounts.append(AccountInfo(email=email, has_token=True))
                 # Auto-load service if not already in memory
                 if email not in state.gmail_services:
                     try:
                         svc = get_authenticated_service(email)
                         state.gmail_services[email] = svc
                     except Exception:
-                        pass
+                        pass  # Token expired/revoked — don't list this account
+                # Only return accounts with a live service
+                if email in state.gmail_services:
+                    accounts.append(AccountInfo(email=email, has_token=True))
     return AccountsResponse(accounts=accounts)
 
 
@@ -103,10 +105,6 @@ def logout_account(email: str):
     Does NOT delete data/<email>/ — tokens persist for re-login.
     Returns 404 if the account is not currently connected.
     """
-    if email not in state.gmail_services:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail=f"Account '{email}' is not connected")
-
     thread = state.sync_threads.get(email)
     stop_sync(email, thread=thread)
 

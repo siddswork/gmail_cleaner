@@ -26,10 +26,12 @@ export function FilterPanel({ senders, onPreview, loading }: Props) {
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [minSizeKb, setMinSizeKb] = useState(0);
 
-  const activeSender = customSender.trim() || senderEmail;
+  const activeSender = customSender.trim() || senderEmail || undefined;
+
+  const hasAnyFilter = !!(activeSender || startDate || endDate || labels.length || unreadOnly || minSizeKb > 0);
 
   const handleSubmit = () => {
-    if (!activeSender) return;
+    if (!hasAnyFilter) return;
     const toTs = (d: string) =>
       d ? Math.floor(new Date(d).getTime() / 1000) : null;
     onPreview({
@@ -139,11 +141,14 @@ export function FilterPanel({ senders, onPreview, loading }: Props) {
 
       <button
         onClick={handleSubmit}
-        disabled={!activeSender || loading}
+        disabled={!hasAnyFilter || loading}
         className="px-4 py-2 rounded bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-40"
       >
         {loading ? "Loading..." : "Preview"}
       </button>
+      {!hasAnyFilter && (
+        <p className="text-xs text-gray-400">Set at least one filter to preview.</p>
+      )}
     </div>
   );
 }

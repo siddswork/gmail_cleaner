@@ -26,6 +26,7 @@ echo "Starting backend (FastAPI) on http://localhost:8000 ..."
 echo $! > "$BACKEND_PID_FILE"
 
 echo "Starting frontend (Next.js) on http://localhost:3000 ..."
+rm -f "$SCRIPT_DIR/frontend/.next/dev/lock"
 cd frontend && npm run dev > ../.frontend.log 2>&1 &
 echo $! > "$FRONTEND_PID_FILE"
 cd "$SCRIPT_DIR"
