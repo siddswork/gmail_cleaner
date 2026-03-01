@@ -69,10 +69,17 @@ export function useSyncStatus(account: string | null) {
     openSSE(account);
   };
 
+  const forceFullSync = async () => {
+    if (!account) return;
+    await api.sync.forceStart(account);
+    api.sync.status(account).then(setStatus).catch(() => {});
+    openSSE(account);
+  };
+
   const refreshStatus = useCallback(() => {
     if (!account) return;
     api.sync.status(account).then(setStatus).catch(() => {});
   }, [account]);
 
-  return { status, startSync, refreshStatus };
+  return { status, startSync, forceFullSync, refreshStatus };
 }

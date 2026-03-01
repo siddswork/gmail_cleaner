@@ -1,10 +1,12 @@
 "use client";
+import { useState } from "react";
 import type { SyncStatus } from "@/lib/types";
 import { fmtCount, fmtDate } from "@/lib/format";
 
 interface Props {
   status: SyncStatus | null;
   onStartSync: () => void;
+  onForceSync: () => void;
 }
 
 function fmtEta(seconds: number): string {
@@ -16,7 +18,9 @@ function fmtEta(seconds: number): string {
   return remMins > 0 ? `~${hrs}h ${remMins}min remaining` : `~${hrs}h remaining`;
 }
 
-export function SyncBanner({ status, onStartSync }: Props) {
+export function SyncBanner({ status, onStartSync, onForceSync }: Props) {
+  const [showConfirm, setShowConfirm] = useState(false);
+
   if (!status) return null;
 
   if (status.is_syncing) {
@@ -72,17 +76,48 @@ export function SyncBanner({ status, onStartSync }: Props) {
 
   if (status.is_complete) {
     return (
-      <div className="rounded bg-green-50 border border-green-200 px-4 py-3 text-sm flex items-center justify-between">
-        <span>
-          {fmtCount(status.total_synced)} emails cached. Last sync:{" "}
-          {fmtDate(status.last_full_sync_ts)}.
-        </span>
-        <button
-          onClick={onStartSync}
-          className="ml-4 px-3 py-1 rounded bg-green-600 text-white text-xs font-medium hover:bg-green-700"
-        >
-          Sync now
-        </button>
+      <div className="rounded bg-green-50 border border-green-200 px-4 py-3 text-sm">
+        <div className="flex items-center justify-between">
+          <span>
+            {fmtCount(status.total_synced)} emails cached. Last sync:{" "}
+            {fmtDate(status.last_full_sync_ts)}.
+          </span>
+          <div className="flex items-center gap-2 ml-4">
+            <button
+              onClick={onStartSync}
+              className="px-3 py-1 rounded bg-green-600 text-white text-xs font-medium hover:bg-green-700"
+            >
+              Sync now
+            </button>
+            <button
+              onClick={() => setShowConfirm(true)}
+              className="px-3 py-1 rounded border border-red-400 text-red-600 text-xs font-medium hover:bg-red-50"
+            >
+              Force full re-sync
+            </button>
+          </div>
+        </div>
+        {showConfirm && (
+          <div className="mt-3 p-3 rounded bg-red-50 border border-red-200 text-xs">
+            <p className="mb-2 text-red-700 font-medium">
+              This will clear your local cache and re-sync all emails from Gmail. This takes 90–120 minutes. Continue?
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => { setShowConfirm(false); onForceSync(); }}
+                className="px-3 py-1 rounded bg-red-600 text-white font-medium hover:bg-red-700"
+              >
+                Yes, re-sync everything
+              </button>
+              <button
+                onClick={() => setShowConfirm(false)}
+                className="px-3 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     );
   }

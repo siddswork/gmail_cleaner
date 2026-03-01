@@ -41,7 +41,7 @@ function LoginPage({ connect }: { connect: () => Promise<void> }) {
 // ---------------------------------------------------------------------------
 
 function Dashboard({ account }: { account: string }) {
-  const { status, startSync } = useSyncStatus(account);
+  const { status, startSync, forceFullSync } = useSyncStatus(account);
   const [stats, setStats] = useState<OverallStats | null>(null);
   const [senders, setSenders] = useState<SenderInfo[]>([]);
   const [categories, setCategories] = useState<CategoryInfo[]>([]);
@@ -106,7 +106,7 @@ function Dashboard({ account }: { account: string }) {
       </div>
 
       <div className="mb-6">
-        <SyncBanner status={status} onStartSync={startSync} />
+        <SyncBanner status={status} onStartSync={startSync} onForceSync={forceFullSync} />
       </div>
 
       {loading && <p className="text-sm text-gray-400 mb-4">Loading...</p>}

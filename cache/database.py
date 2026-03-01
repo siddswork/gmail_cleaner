@@ -217,3 +217,16 @@ def set_sync_state(account_email: str, key: str, value: str) -> None:
             (key, value),
         )
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Cache management
+# ---------------------------------------------------------------------------
+
+def clear_cache(account_email: str) -> None:
+    """Clear all emails and sync_state rows, preserving action_log history."""
+    conn = _connect(account_email)
+    with conn:
+        conn.execute("DELETE FROM emails")
+        conn.execute("DELETE FROM sync_state")
+    conn.close()

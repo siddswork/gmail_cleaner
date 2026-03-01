@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from backend import state
 from backend.dependencies import get_account, get_service
 from backend.models.schemas import SyncStartResponse, SyncStatusResponse
-from cache.database import init_db
+from cache.database import clear_cache, init_db
 from cache.sync_manager import (
     get_sync_progress,
     needs_full_sync,
@@ -41,12 +41,15 @@ def sync_status(account: str = Depends(get_account)):
 
 
 @router.post("/start", response_model=SyncStartResponse)
-def start_sync(account: str = Depends(get_account)):
-    """Start a background sync for the account."""
+def start_sync(account: str = Depends(get_account), force: bool = False):
+    """Start a background sync for the account. Use force=true to wipe the cache first."""
     # Check if already running
     thread = state.sync_threads.get(account)
     if thread is not None and thread.is_alive():
         return SyncStartResponse(message="Sync already running", already_running=True)
+
+    if force:
+        clear_cache(account)
 
     service = state.gmail_services[account]
     init_db(account)

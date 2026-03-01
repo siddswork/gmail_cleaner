@@ -17,6 +17,7 @@ from cache.database import (
     log_action,
     get_sync_state,
     set_sync_state,
+    clear_cache,
 )
 
 
@@ -281,3 +282,48 @@ class TestSyncState:
         init_db("bob@gmail.com")
         set_sync_state("alice@gmail.com", "last_history_id", "alice_val")
         assert get_sync_state("bob@gmail.com", "last_history_id") is None
+
+
+# ---------------------------------------------------------------------------
+# Clear cache
+# ---------------------------------------------------------------------------
+
+class TestClearCache:
+    def test_clears_all_emails(self, account, sample_email):
+        upsert_email(account, sample_email)
+        clear_cache(account)
+        assert get_email(account, sample_email["message_id"]) is None
+
+    def test_clears_sync_state(self, account):
+        set_sync_state(account, "last_history_id", "999")
+        set_sync_state(account, "last_full_sync_ts", "1700000000")
+        clear_cache(account)
+        assert get_sync_state(account, "last_history_id") is None
+        assert get_sync_state(account, "last_full_sync_ts") is None
+
+    def test_preserves_action_log(self, account):
+        import json as _json
+        log_action(account, {
+            "action": "trash",
+            "message_ids": _json.dumps(["msg_001"]),
+            "count": 1,
+            "size_reclaimed": 1000,
+            "timestamp": 1700001000,
+            "details": "{}",
+        })
+        clear_cache(account)
+        import sqlite3
+        conn = sqlite3.connect(get_db_path(account))
+        rows = conn.execute("SELECT * FROM action_log").fetchall()
+        conn.close()
+        assert len(rows) == 1
+
+    def test_clears_multiple_emails(self, account, sample_email):
+        for i in range(5):
+            upsert_email(account, {**sample_email, "message_id": f"msg_{i}"})
+        clear_cache(account)
+        import sqlite3
+        conn = sqlite3.connect(get_db_path(account))
+        count = conn.execute("SELECT COUNT(*) FROM emails").fetchone()[0]
+        conn.close()
+        assert count == 0

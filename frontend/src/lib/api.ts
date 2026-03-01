@@ -36,6 +36,8 @@ export const api = {
       request<import("./types").SyncStatus>(`/api/sync/status?account=${encodeURIComponent(account)}`),
     start: (account: string) =>
       request<{ message: string; already_running: boolean }>(`/api/sync/start?account=${encodeURIComponent(account)}`, { method: "POST" }),
+    forceStart: (account: string) =>
+      request<{ message: string; already_running: boolean }>(`/api/sync/start?account=${encodeURIComponent(account)}&force=true`, { method: "POST" }),
     progressUrl: (account: string) =>
       `${API}/api/sync/progress?account=${encodeURIComponent(account)}`,
   },
