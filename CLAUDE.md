@@ -275,24 +275,21 @@ Open `http://localhost:3000` in browser.
 ---
 
 ## Last Session
-**Date**: 2026-02-22
+**Date**: 2026-03-01
 
 ### What Was Accomplished
-- All previous UX rework implemented and committed (311 tests passing):
-  - Background sync with SSE progress, stop support, ETA calculation
-  - execute_with_retry with 60s minimum wait for 403 rateLimitExceeded
-  - Single-account login model (logout button in sidebar)
-  - Sync progress shows real DB count (not stale sync_state value)
-  - date_ts=0 filtering in aggregator (oldest email, timeline)
-  - SendersBar chart shows all N items (not hardcoded 20)
-- Cleanup rework plan written (plan file: `/home/sidd/.claude/plans/snuggly-imagining-lemur.md`)
+- Cleanup rework fully complete (was done in a prior session — verified this session):
+  - `gmail/actions.py` — retry + progress_callback + stop_event
+  - `cache/cleanup_manager.py` — background daemon thread + in-memory progress
+  - `backend/routers/cleanup.py` — async execute (202), job-status, SSE progress, stop, smart-sweep endpoints
+  - `analysis/cleanup_queries.py` — smart_sweep_query
+  - Frontend — useCleanup hook (SSE), CleanupProgressBar, 3-tab cleanup page (Bulk Senders / Smart Sweep / Advanced)
+- Force Full Re-sync implemented (TDD):
+  - `cache/database.py` — `clear_cache()` wipes emails + sync_state, preserves action_log
+  - `backend/routers/sync.py` — `force=true` query param on `POST /api/sync/start`
+  - Frontend — `api.sync.forceStart()`, `forceFullSync` in `useSyncStatus`, confirmation dialog in `SyncBanner`
+- `tests/test_gmail_actions.py` — 18 new tests for `trash_messages` (empty, clean path, progress_callback, stop_event, exceptions)
+- **413 tests passing**
 
-### Next Step: Implement Cleanup Rework
-Plan is approved. Switch to Sonnet, then implement in TDD order:
-1. Phase 1: `gmail/actions.py` — retry + progress_callback + stop_event (write `tests/test_gmail_actions.py` first)
-2. Phase 2: `cache/cleanup_manager.py` (new) + `backend/state.py` (write `tests/test_backend/test_cleanup_manager.py` first)
-3. Phase 3: `analysis/cleanup_queries.py` smart_sweep_query + new router endpoints (extend existing test files first)
-4. Phase 4: Frontend types + API client + useCleanup hook (SSE-based)
-5. Phase 5: Cleanup page 3-tab UI + CleanupProgressBar component
-
-Read plan file for full details before starting.
+### Current State
+All planned work is complete. No pending tasks.
