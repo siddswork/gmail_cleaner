@@ -20,6 +20,7 @@ from cache.database import (
     get_sync_state,
     set_sync_state,
 )
+from gmail.client import execute_with_retry
 from gmail.fetcher import fetch_metadata_batch, list_message_ids
 
 logger = logging.getLogger(__name__)
@@ -45,7 +46,7 @@ def full_sync(account_email: str, service, progress_callback=None, stop_event=No
     """
     # Capture historyId before we start paging — it represents the mailbox
     # state at the beginning of the sync, which is what we want to store.
-    profile = service.users().getProfile(userId="me").execute()
+    profile = execute_with_retry(service.users().getProfile(userId="me"))
     history_id = profile["historyId"]
 
     # Store total messages count for progress bar ETA calculation
@@ -117,11 +118,13 @@ def incremental_sync(account_email: str, service) -> int:
 
     logger.info("Incremental sync started for %s (historyId %s)", account_email, history_id)
 
-    response = service.users().history().list(
-        userId="me",
-        startHistoryId=history_id,
-        historyTypes=["messageAdded", "messageDeleted"],
-    ).execute()
+    response = execute_with_retry(
+        service.users().history().list(
+            userId="me",
+            startHistoryId=history_id,
+            historyTypes=["messageAdded", "messageDeleted"],
+        )
+    )
 
     history_records = response.get("history", [])
 

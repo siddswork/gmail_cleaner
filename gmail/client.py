@@ -8,6 +8,7 @@ Provides:
 """
 import json
 import logging
+import ssl
 import time
 
 from googleapiclient.errors import HttpError
@@ -16,6 +17,21 @@ logger = logging.getLogger(__name__)
 
 RETRYABLE_STATUS_CODES = {429, 500, 503}
 RATE_LIMIT_403_REASONS = {"rateLimitExceeded", "userRateLimitExceeded"}
+
+# Network-level errors that are always transient and safe to retry.
+# SSLEOFError, ConnectionResetError, BrokenPipeError are all OSError subclasses,
+# but we list them explicitly for clarity.
+TRANSIENT_NETWORK_ERRORS = (
+    ssl.SSLEOFError,
+    ConnectionResetError,
+    BrokenPipeError,
+    TimeoutError,
+    OSError,
+)
+
+# Retry config for batch.execute() network failures
+_BATCH_RETRY_ATTEMPTS = 3
+_BATCH_RETRY_DELAY = 5.0
 
 
 def _is_rate_limit_403(exc: HttpError) -> bool:
@@ -70,6 +86,8 @@ def execute_with_retry(request, max_attempts: int = 8, base_delay: float = 2.0):
 
     - 429 / 500 / 503: standard backoff (base_delay * 2^attempt)
     - 403 rateLimitExceeded: minimum 60s wait (per-minute quota window)
+    - SSLEOFError / ConnectionResetError / BrokenPipeError / TimeoutError / OSError:
+      standard backoff (transient network drops)
     - any other HttpError: raised immediately
     """
     last_exc = None
@@ -81,7 +99,7 @@ def execute_with_retry(request, max_attempts: int = 8, base_delay: float = 2.0):
             if status in RETRYABLE_STATUS_CODES:
                 delay = base_delay * (2 ** attempt)
                 logger.warning(
-                    "Transient error (%s) — retrying in %ds (attempt %d/%d)",
+                    "Transient HTTP error (%s) — retrying in %ds (attempt %d/%d)",
                     status, int(delay), attempt + 1, max_attempts,
                 )
             elif status == 403 and _is_rate_limit_403(exc):
@@ -93,6 +111,32 @@ def execute_with_retry(request, max_attempts: int = 8, base_delay: float = 2.0):
                 )
             else:
                 raise
+            last_exc = exc
+            time.sleep(delay)
+        except TRANSIENT_NETWORK_ERRORS as exc:
+            delay = base_delay * (2 ** attempt)
+            logger.warning(
+                "Transient network error (%s: %s) — retrying in %ds (attempt %d/%d)",
+                type(exc).__name__, exc, int(delay), attempt + 1, max_attempts,
+            )
+            last_exc = exc
+            time.sleep(delay)
+    raise last_exc
+
+
+def _batch_execute_with_retry(batch) -> None:
+    """Execute a batch request, retrying on transient network errors."""
+    last_exc = None
+    for attempt in range(_BATCH_RETRY_ATTEMPTS):
+        try:
+            batch.execute()
+            return
+        except TRANSIENT_NETWORK_ERRORS as exc:
+            delay = _BATCH_RETRY_DELAY * (2 ** attempt)
+            logger.warning(
+                "Batch network error (%s) — retrying in %ds (attempt %d/%d)",
+                type(exc).__name__, int(delay), attempt + 1, _BATCH_RETRY_ATTEMPTS,
+            )
             last_exc = exc
             time.sleep(delay)
     raise last_exc
@@ -125,4 +169,4 @@ def batch_execute(
         batch = service.new_batch_http_request(callback=callback)
         for req in chunk:
             batch.add(req)
-        batch.execute()
+        _batch_execute_with_retry(batch)

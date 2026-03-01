@@ -10,12 +10,19 @@ running when start_background_cleanup is called.
 """
 import logging
 import threading
+import time
 
 from cache.sync import incremental_sync
+from gmail.client import TRANSIENT_NETWORK_ERRORS
 
 logger = logging.getLogger(__name__)
 from components.safety import live_label_check
 from gmail.actions import trash_messages
+
+# Retry config for transient network failures during the trash phase.
+# 3 attempts × 30s delay = up to ~1 minute of recovery time before giving up.
+_TRASH_RETRY_ATTEMPTS = 3
+_TRASH_RETRY_DELAY = 30.0
 
 # Per-account stop events — set to signal a running cleanup to stop gracefully.
 stop_events: dict[str, threading.Event] = {}
@@ -151,14 +158,57 @@ def _cleanup_worker(
         # Update total to reflect safe IDs only
         cleanup_progress[account_email]["total"] = len(safe_ids)
 
-        # Step 3: trash safe messages
-        result = trash_messages(
-            account_email,
-            service,
-            safe_ids,
-            progress_callback=_progress_callback,
-            stop_event=stop_event,
-        )
+        # Step 3: trash safe messages (with retry on transient network errors)
+        result = None
+        for attempt in range(_TRASH_RETRY_ATTEMPTS):
+            try:
+                if attempt > 0:
+                    # Re-run live label check to get fresh label state before retry
+                    logger.warning(
+                        "Cleanup retry %d/%d for %s — re-checking labels",
+                        attempt + 1, _TRASH_RETRY_ATTEMPTS, account_email,
+                    )
+                    cleanup_progress[account_email]["status"] = "retrying"
+                    check = live_label_check(service, safe_ids)
+                    safe_ids = check["safe"]
+                    if not safe_ids:
+                        break
+
+                result = trash_messages(
+                    account_email,
+                    service,
+                    safe_ids,
+                    progress_callback=_progress_callback,
+                    stop_event=stop_event,
+                )
+                break  # success — exit retry loop
+
+            except TRANSIENT_NETWORK_ERRORS as exc:
+                if attempt < _TRASH_RETRY_ATTEMPTS - 1:
+                    logger.warning(
+                        "Cleanup network error for %s (%s: %s) — waiting %ds before retry (attempt %d/%d)",
+                        account_email, type(exc).__name__, exc,
+                        int(_TRASH_RETRY_DELAY), attempt + 1, _TRASH_RETRY_ATTEMPTS,
+                    )
+                    time.sleep(_TRASH_RETRY_DELAY)
+                else:
+                    logger.error(
+                        "Cleanup exhausted %d retries for %s — giving up",
+                        _TRASH_RETRY_ATTEMPTS, account_email,
+                    )
+                    raise
+
+        if result is None:
+            # All safe_ids were blocked on re-check after a retry
+            cleanup_progress[account_email].update({
+                "status": "done",
+                "total": 0,
+                "processed": 0,
+                "trashed": 0,
+                "size_reclaimed": 0,
+            })
+            return
+
         stopped = result.get("stopped_early")
         status = "stopped" if stopped else "done"
         cleanup_progress[account_email].update({

@@ -3,10 +3,11 @@ Tests for cache/cleanup_manager.py
 
 Run with: pytest tests/test_backend/test_cleanup_manager.py -v
 """
+import ssl
 import threading
 import time
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, call
 
 from cache.database import init_db
 
@@ -366,7 +367,7 @@ class TestFinalStatus:
         assert result["status"] == "stopped"
 
     def test_status_error_on_exception(self, account):
-        """When trash_messages raises, status is 'error'."""
+        """When trash_messages raises a non-transient error, status is 'error' without retry."""
         from cache.cleanup_manager import start_background_cleanup, get_cleanup_progress
 
         with patch("cache.cleanup_manager.trash_messages",
@@ -376,3 +377,106 @@ class TestFinalStatus:
 
         result = get_cleanup_progress(account)
         assert result["status"] == "error"
+
+
+# ---------------------------------------------------------------------------
+# Auto-retry on transient network errors
+# ---------------------------------------------------------------------------
+
+class TestWorkerAutoRetry:
+    def test_retries_on_ssl_eof_error_and_succeeds(self, account, mock_sync_and_check):
+        """trash_messages raises SSLEOFError on first attempt; worker retries and status='done'."""
+        from cache.cleanup_manager import start_background_cleanup, get_cleanup_progress
+
+        calls = []
+        def fake_trash(acct, svc, message_ids, progress_callback=None, stop_event=None):
+            calls.append(len(message_ids))
+            if len(calls) == 1:
+                raise ssl.SSLEOFError("connection dropped")
+            return {"trashed": len(message_ids), "size_reclaimed": 1000, "stopped_early": False}
+
+        with (
+            patch("cache.cleanup_manager.trash_messages", side_effect=fake_trash),
+            patch("time.sleep"),
+        ):
+            t = start_background_cleanup(account, MagicMock(), ["m1", "m2"])
+            t.join(timeout=5)
+
+        result = get_cleanup_progress(account)
+        assert result["status"] == "done"
+        assert len(calls) == 2  # failed once, succeeded on retry
+
+    def test_status_error_when_all_retries_exhausted(self, account, mock_sync_and_check):
+        """All retry attempts raise SSLEOFError; final status is 'error'."""
+        from cache.cleanup_manager import start_background_cleanup, get_cleanup_progress
+
+        with (
+            patch("cache.cleanup_manager.trash_messages", side_effect=ssl.SSLEOFError("dropped")),
+            patch("time.sleep"),
+        ):
+            t = start_background_cleanup(account, MagicMock(), ["m1"])
+            t.join(timeout=5)
+
+        result = get_cleanup_progress(account)
+        assert result["status"] == "error"
+
+    def test_non_transient_exception_does_not_retry(self, account, mock_sync_and_check):
+        """RuntimeError (non-network) is not retried — trash_messages called once, status='error'."""
+        from cache.cleanup_manager import start_background_cleanup, get_cleanup_progress
+
+        calls = []
+        def fake_trash(acct, svc, message_ids, progress_callback=None, stop_event=None):
+            calls.append(1)
+            raise RuntimeError("unexpected non-network failure")
+
+        with patch("cache.cleanup_manager.trash_messages", side_effect=fake_trash):
+            t = start_background_cleanup(account, MagicMock(), ["m1"])
+            t.join(timeout=2)
+
+        result = get_cleanup_progress(account)
+        assert result["status"] == "error"
+        assert len(calls) == 1  # no retry for non-transient errors
+
+    def test_live_label_check_rerun_on_retry(self, account, mock_sync_and_check):
+        """live_label_check is called again on each retry attempt."""
+        from cache.cleanup_manager import start_background_cleanup
+
+        calls = []
+        def fake_trash(acct, svc, message_ids, progress_callback=None, stop_event=None):
+            calls.append(1)
+            if len(calls) == 1:
+                raise ssl.SSLEOFError("dropped")
+            return {"trashed": 1, "size_reclaimed": 100, "stopped_early": False}
+
+        with (
+            patch("cache.cleanup_manager.trash_messages", side_effect=fake_trash),
+            patch("time.sleep"),
+        ):
+            t = start_background_cleanup(account, MagicMock(), ["m1"])
+            t.join(timeout=5)
+
+        # 1 initial call + 1 retry call = 2 total
+        assert mock_sync_and_check.call_count == 2
+
+    def test_retry_waits_before_next_attempt(self, account, mock_sync_and_check):
+        """Worker sleeps between retry attempts."""
+        from cache.cleanup_manager import start_background_cleanup
+        import cache.cleanup_manager as cm
+
+        calls = []
+        def fake_trash(acct, svc, message_ids, progress_callback=None, stop_event=None):
+            calls.append(1)
+            if len(calls) == 1:
+                raise ssl.SSLEOFError("dropped")
+            return {"trashed": 1, "size_reclaimed": 100, "stopped_early": False}
+
+        with (
+            patch("cache.cleanup_manager.trash_messages", side_effect=fake_trash),
+            patch("time.sleep") as mock_sleep,
+        ):
+            t = start_background_cleanup(account, MagicMock(), ["m1"])
+            t.join(timeout=5)
+
+        mock_sleep.assert_called_once()
+        delay = mock_sleep.call_args_list[0].args[0]
+        assert delay >= cm._TRASH_RETRY_DELAY

@@ -3,6 +3,7 @@ Tests for cache/sync.py
 
 Run with: pytest tests/test_sync.py -v
 """
+import ssl
 import pytest
 from unittest.mock import MagicMock, patch, call
 
@@ -267,3 +268,39 @@ class TestIncrementalSync:
         ):
             count = incremental_sync(account, service)
         assert count == 3  # 2 added + 1 deleted
+
+    def test_retries_on_ssl_eof_error(self, account):
+        """incremental_sync must retry history.list on SSLEOFError."""
+        set_sync_state(account, "last_history_id", "12345")
+        service = MagicMock()
+        service.users().history().list().execute.side_effect = [
+            ssl.SSLEOFError(),
+            {"history": [], "historyId": "12346"},
+        ]
+        with (
+            patch("cache.sync.fetch_metadata_batch", return_value=[]),
+            patch("time.sleep"),
+        ):
+            count = incremental_sync(account, service)
+        assert count == 0
+        # execute called twice — once failed, once succeeded
+        assert service.users().history().list().execute.call_count == 2
+
+
+class TestFullSyncRetry:
+    def test_retries_get_profile_on_ssl_eof_error(self, account):
+        """full_sync must retry getProfile on SSLEOFError."""
+        service = MagicMock()
+        service.users().getProfile().execute.side_effect = [
+            ssl.SSLEOFError(),
+            {"historyId": "99999", "emailAddress": "test@example.com"},
+        ]
+        with (
+            patch("cache.sync.list_message_ids") as mock_list,
+            patch("cache.sync.fetch_metadata_batch", return_value=[]),
+            patch("time.sleep"),
+        ):
+            mock_list.return_value = {"ids": [], "next_page_token": None}
+            full_sync(account, service)
+        assert get_sync_state(account, "last_history_id") == "99999"
+        assert service.users().getProfile().execute.call_count == 2

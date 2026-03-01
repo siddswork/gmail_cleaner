@@ -3,6 +3,7 @@ Tests for gmail/client.py
 
 Run with: pytest tests/test_client.py -v
 """
+import ssl
 import pytest
 from unittest.mock import MagicMock, patch, call
 
@@ -166,6 +167,60 @@ class TestExecuteWithRetry:
         assert len(delays) == 2
         assert delays[1] > delays[0]
 
+    def test_retries_on_ssl_eof_error(self):
+        """SSLEOFError (transient network drop) must be retried."""
+        request = MagicMock()
+        request.execute.side_effect = [ssl.SSLEOFError(), {"id": "ok"}]
+        with patch("time.sleep"):
+            result = execute_with_retry(request)
+        assert result == {"id": "ok"}
+        assert request.execute.call_count == 2
+
+    def test_retries_on_connection_reset_error(self):
+        """ConnectionResetError must be retried."""
+        request = MagicMock()
+        request.execute.side_effect = [ConnectionResetError(), {"id": "ok"}]
+        with patch("time.sleep"):
+            result = execute_with_retry(request)
+        assert result == {"id": "ok"}
+        assert request.execute.call_count == 2
+
+    def test_retries_on_broken_pipe_error(self):
+        """BrokenPipeError must be retried."""
+        request = MagicMock()
+        request.execute.side_effect = [BrokenPipeError(), {"id": "ok"}]
+        with patch("time.sleep"):
+            result = execute_with_retry(request)
+        assert result == {"id": "ok"}
+        assert request.execute.call_count == 2
+
+    def test_retries_on_timeout_error(self):
+        """TimeoutError must be retried."""
+        request = MagicMock()
+        request.execute.side_effect = [TimeoutError(), {"id": "ok"}]
+        with patch("time.sleep"):
+            result = execute_with_retry(request)
+        assert result == {"id": "ok"}
+        assert request.execute.call_count == 2
+
+    def test_network_error_uses_standard_backoff_not_rate_limit_backoff(self):
+        """Network errors use normal backoff — not the 60s rate-limit wait."""
+        request = MagicMock()
+        request.execute.side_effect = [ssl.SSLEOFError(), {"id": "ok"}]
+        with patch("time.sleep") as mock_sleep:
+            execute_with_retry(request, base_delay=2.0)
+        delay = mock_sleep.call_args_list[0].args[0]
+        assert delay < 60.0
+
+    def test_network_error_raises_after_max_attempts(self):
+        """Network errors exhaust max_attempts and re-raise the last exception."""
+        request = MagicMock()
+        request.execute.side_effect = ssl.SSLEOFError("connection dropped")
+        with patch("time.sleep"):
+            with pytest.raises(ssl.SSLEOFError):
+                execute_with_retry(request, max_attempts=3)
+        assert request.execute.call_count == 3
+
 
 # ---------------------------------------------------------------------------
 # batch_execute
@@ -226,3 +281,23 @@ class TestBatchExecute:
         requests = [MagicMock() for _ in range(50)]
         batch_execute(service, requests, MagicMock())  # rate_limiter=None by default
         batch.execute.assert_called_once()
+
+    def test_batch_execute_retries_on_ssl_eof_error(self):
+        """batch.execute() SSLEOFError is retried before raising."""
+        service = MagicMock()
+        batch = MagicMock()
+        batch.execute.side_effect = [ssl.SSLEOFError(), None]
+        service.new_batch_http_request.return_value = batch
+        with patch("time.sleep"):
+            batch_execute(service, [MagicMock()], MagicMock())
+        assert batch.execute.call_count == 2
+
+    def test_batch_execute_raises_after_max_batch_retries(self):
+        """batch.execute() raises after exhausting retries."""
+        service = MagicMock()
+        batch = MagicMock()
+        batch.execute.side_effect = ssl.SSLEOFError("dropped")
+        service.new_batch_http_request.return_value = batch
+        with patch("time.sleep"):
+            with pytest.raises(ssl.SSLEOFError):
+                batch_execute(service, [MagicMock()], MagicMock())
